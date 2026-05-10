@@ -2,6 +2,7 @@ import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 
+
 class UserManager(BaseUserManager):
     """Custom user manager for the User model"""
 
@@ -48,14 +49,22 @@ class User(AbstractBaseUser, PermissionsMixin):
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
     profile_picture = models.TextField(blank=True, null=True)
+
+    # Profile fields
+    bio = models.TextField(blank=True, default='')
+    interests = models.JSONField(default=list, blank=True)  # Store interests as JSON
     education_level = models.CharField(max_length=50, blank=True, null=True)
     years_experience = models.IntegerField(default=0)
+    current_job_title = models.CharField(max_length=100, blank=True, default='')
+
+    # XP and level tracking
+    total_xp = models.IntegerField(default=0)
+
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Use the custom manager
     objects = UserManager()
 
     USERNAME_FIELD = 'username'
@@ -72,17 +81,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.username
 
     def get_full_name(self):
-        """Return the full name of the user"""
         return f"{self.first_name} {self.last_name}".strip() or self.username
 
     def get_short_name(self):
-        """Return the short name of the user"""
         return self.username
 
     @property
     def full_name(self):
         return self.get_full_name()
 
+    @property
+    def current_level(self):
+        return (self.total_xp // 100) + 1
+
     def natural_key(self):
-        """Required for Django's authentication system"""
         return (self.username,)

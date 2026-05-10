@@ -7,7 +7,6 @@ from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from django.contrib.auth import authenticate
 from users.models import User
 from .serializers import (
@@ -18,7 +17,8 @@ from .serializers import (
 from progress.models import UserEnrollment, UserProgress
 from skills.models import UserSkill
 from assessment.models import QuizAttempt
-from ai.models import Recommendation, CV
+from ai.models import Recommendation
+from cv.models import CV
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -55,10 +55,7 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Create user
         user = serializer.save()
-
-        # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
 
         return Response({
@@ -79,11 +76,9 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        """Handle POST request for login"""
         username = request.data.get('username')
         password = request.data.get('password')
 
-        # Also support email login
         if not username:
             email = request.data.get('email')
             if email:
@@ -98,7 +93,6 @@ class LoginView(APIView):
                 'error': 'Username/email and password are required'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Authenticate user
         user = authenticate(username=username, password=password)
 
         if user is not None:
@@ -107,7 +101,6 @@ class LoginView(APIView):
                     'error': 'This account is disabled'
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
 
             return Response({
@@ -135,7 +128,6 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        """POST logout - blacklist refresh token"""
         try:
             refresh_token = request.data.get('refresh')
             if refresh_token:
@@ -166,14 +158,14 @@ class ChangePasswordView(generics.UpdateAPIView):
 
 
 class ProfileView(generics.RetrieveUpdateAPIView):
-    """View for user profile - retrieve and update"""
+    """Get/Update User Profile"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
         return self.request.user
 
     def get_serializer_class(self):
-        if self.request.method == 'PUT' or self.request.method == 'PATCH':
+        if self.request.method in ['PUT', 'PATCH']:
             return UserProfileUpdateSerializer
         return UserProfileSerializer
 
@@ -245,10 +237,7 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         total_modules_started = UserProgress.objects.filter(
             user=user
         ).exclude(status='not_started').count()
-        total_xp = UserProgress.objects.filter(
-            user=user,
-            status='completed'
-        ).aggregate(total=Sum('module__xp_points'))['total'] or 0
+        total_xp = user.total_xp
         quiz_attempts = QuizAttempt.objects.filter(user=user)
         avg_quiz_score = quiz_attempts.aggregate(Avg('score'))['score__avg'] or 0
         total_quizzes = quiz_attempts.count()
@@ -306,15 +295,12 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
     def _calculate_streak(self, user):
         """Calculate current daily activity streak"""
-        # Since no date fields in UserProgress, return 0 or calculate from enrollment dates
-        # Check if there are any completed modules at all
         completed_exists = UserProgress.objects.filter(
             user=user,
             status='completed'
         ).exists()
-
         if completed_exists:
-            return 1  # At least they've completed something
+            return 1
         return 0
 
     def _get_longest_streak(self, user):
@@ -323,9 +309,8 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             user=user,
             status='completed'
         ).count()
-
         if completed_count > 0:
-            return min(completed_count, 30)  # Simple approximation
+            return min(completed_count, 30)
         return 0
 
 
@@ -368,8 +353,8 @@ class ProfileStatsView(generics.GenericAPIView):
             completions = UserProgress.objects.filter(
                 user=user,
                 status='completed',
-                updated_at__date__gte=month_start,
-                updated_at__date__lte=month_end
+                created_at__date__gte=month_start,
+                created_at__date__lte=month_end
             ).count()
             monthly_progress.append({
                 'month': month_start.strftime('%B %Y'),
@@ -425,10 +410,7 @@ class PublicProfileView(generics.RetrieveAPIView):
         public_skills = UserSkill.objects.filter(
             user=user
         ).select_related('skill')[:10]
-        total_xp = UserProgress.objects.filter(
-            user=user,
-            status='completed'
-        ).aggregate(total=Sum('module__xp_points'))['total'] or 0
+        total_xp = user.total_xp
         serializer = self.get_serializer(user)
         data = serializer.data
         data['completed_paths'] = [
@@ -441,4 +423,33 @@ class PublicProfileView(generics.RetrieveAPIView):
         ]
         data['total_xp'] = total_xp
         data['member_since'] = user.created_at
+        return Response(data)
+
+
+class ProfileManagementView(generics.RetrieveUpdateAPIView):
+    """Simplified profile endpoint for the profile management page"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = UserProfileUpdateSerializer
+
+    def get_object(self):
+        return self.request.user
+
+    def retrieve(self, request, *args, **kwargs):
+        user = self.get_object()
+        serializer = UserProfileUpdateSerializer(user)
+        data = serializer.data
+        # Add email separately since it's read-only in the update serializer
+        data['email'] = user.email
+
+        # Add skills
+        skills = UserSkill.objects.filter(user=user).select_related('skill')
+        data['skills'] = [
+            {
+                'id': str(us.skill.id),
+                'name': us.skill.name,
+                'level': us.level
+            }
+            for us in skills
+        ]
+
         return Response(data)

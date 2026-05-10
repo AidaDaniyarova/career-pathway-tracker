@@ -25,20 +25,21 @@ class UserDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name', 'profile_picture',
-                  'education_level', 'years_experience', 'skills', 'enrollments', 'created_at')
+                  'bio', 'interests', 'education_level', 'years_experience', 'current_job_title',
+                  'skills', 'enrollments', 'created_at', 'total_xp', 'current_level')
 
     def get_skills(self, obj):
         user_skills = UserSkill.objects.filter(user=obj).select_related('skill')
-        return [{'id': us.skill.id, 'name': us.skill.name, 'level': us.level} for us in user_skills]
+        return [{'id': str(us.skill.id), 'name': us.skill.name, 'level': us.level} for us in user_skills]
 
     def get_enrollments(self, obj):
         enrollments = UserEnrollment.objects.filter(user=obj).select_related('career_path')
-        return [{'id': e.id, 'career_path': e.career_path.title, 'status': e.status, 'progress': e.progress_percent}
+        return [{'id': str(e.id), 'career_path': e.career_path.title, 'status': e.status,
+                 'progress': float(e.progress_percent)}
                 for e in enrollments]
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
-    """Serializer for user registration"""
     password = serializers.CharField(write_only=True, min_length=8)
     password_confirm = serializers.CharField(write_only=True)
 
@@ -52,11 +53,9 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         if data['password'] != data['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords do not match"})
 
-        # Check if username already exists
         if User.objects.filter(username=data['username']).exists():
             raise serializers.ValidationError({"username": "Username already taken"})
 
-        # Check if email already exists
         if User.objects.filter(email=data['email']).exists():
             raise serializers.ValidationError({"email": "Email already registered"})
 
@@ -96,23 +95,30 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name', 'full_name',
-            'profile_picture', 'education_level', 'years_experience',
-            'member_since', 'is_active'
+            'profile_picture', 'bio', 'interests',
+            'education_level', 'years_experience', 'current_job_title',
+            'member_since', 'total_xp', 'current_level', 'is_active'
         )
-        read_only_fields = ('id', 'email', 'created_at', 'is_active')
+        read_only_fields = ('id', 'email', 'created_at', 'is_active', 'total_xp', 'current_level')
 
     def get_full_name(self, obj):
-        return f"{obj.first_name} {obj.last_name}".strip() or obj.username
+        return obj.get_full_name()
+
+    def get_skills(self, obj):
+        user_skills = UserSkill.objects.filter(user=obj).select_related('skill')
+        return [{'id': str(us.skill.id), 'name': us.skill.name, 'level': us.level} for us in user_skills]
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating user profile"""
+    skills = serializers.ListField(child=serializers.DictField(), required=False, write_only=True)
 
     class Meta:
         model = User
         fields = (
-            'first_name', 'last_name', 'profile_picture',
-            'education_level', 'years_experience'
+            'first_name', 'last_name', 'profile_picture', 'bio',
+            'interests', 'education_level', 'years_experience',
+            'current_job_title', 'skills'
         )
 
     def validate_years_experience(self, value):
@@ -128,23 +134,48 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Must be one of: {', '.join(valid_choices)}")
         return value
 
+    def update(self, instance, validated_data):
+        skills_data = validated_data.pop('skills', None)
+
+        # Update regular fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Update skills if provided
+        if skills_data is not None:
+            # Remove existing skills
+            UserSkill.objects.filter(user=instance).delete()
+            # Add new skills
+            for skill_data in skills_data:
+                skill_id = skill_data.get('id')  # Use 'id' field
+                level = skill_data.get('level', 3)
+                if skill_id:
+                    from skills.models import Skill
+                    try:
+                        skill = Skill.objects.get(id=skill_id)
+                        UserSkill.objects.create(
+                            user=instance,
+                            skill=skill,
+                            level=level
+                        )
+                    except Skill.DoesNotExist:
+                        pass  # Log this error
+
+        return instance
 
 class UserAvatarSerializer(serializers.ModelSerializer):
-    """Serializer for updating profile picture"""
-
     class Meta:
         model = User
         fields = ('profile_picture',)
 
     def validate_profile_picture(self, value):
-        # Basic URL validation
         if value and not (value.startswith('http://') or value.startswith('https://') or value.startswith('/')):
             raise serializers.ValidationError("Invalid URL format")
         return value
 
 
 class UserStatsSerializer(serializers.Serializer):
-    """Serializer for user statistics (read-only)"""
     enrollments = serializers.DictField()
     modules = serializers.DictField()
     xp = serializers.DictField()
@@ -156,7 +187,6 @@ class UserStatsSerializer(serializers.Serializer):
 
 
 class UserSettingsSerializer(serializers.Serializer):
-    """Serializer for user settings"""
     email_notifications = serializers.BooleanField(default=True)
     marketing_emails = serializers.BooleanField(default=False)
     profile_visibility = serializers.ChoiceField(choices=['public', 'private'], default='public')

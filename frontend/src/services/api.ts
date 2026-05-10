@@ -65,8 +65,11 @@ export const authAPI = {
     api.post('/users/register/', data),
   logout: () =>
     api.post('/users/logout/'),
-  getProfile: () =>
-    api.get('/users/profile/'),
+  getProfile: () => axios.get('/api/users/profile/', {
+  headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
+}),
+  updateProfile: (data: any) =>
+    api.put('/users/profile/', data),
 };
 
 // Admin API
@@ -123,6 +126,97 @@ export const adminAPI = {
   getEnrollments: () => api.get('/admin/enrollments/'),
 };
 
+// Career Paths API
+export const careerAPI = {
+  getAll: () => api.get('/learning/career-paths/'),
+  getById: (id: string) => api.get(`/learning/career-paths/${id}/`),
+  enroll: (id: string) => api.post(`/learning/career-paths/${id}/enroll/`),
+  getUserEnrollments: () => api.get('/progress/enrollments/'),
+};
 
+// Learning Modules API
+export const moduleAPI = {
+  getAll: () => api.get('/learning/modules/'),
+  getById: (id: string) => api.get(`/learning/modules/${id}/`),
+  start: (moduleId: string, enrollmentId?: string) =>
+    api.post('/progress/progress/start/', { module_id: moduleId, enrollment_id: enrollmentId }),
+  complete: (moduleId: string, score?: number) =>
+    api.post('/progress/progress/complete/', { module_id: moduleId, score }),
+  updateTime: (moduleId: string, seconds: number) =>
+    api.post('/progress/progress/update_time/', { module_id: moduleId, seconds }),
+  getUserProgress: () => api.get('/progress/progress/'),
+};
+
+// Quizzes API
+export const quizAPI = {
+  getAll: () => api.get('/quizzes/quizzes/'),
+  getById: (id: string) => api.get(`/quizzes/quizzes/${id}/`),
+  start: (id: string) => api.post(`/quizzes/quizzes/${id}/start/`),
+  submit: (id: string, attemptId: string, responses: any[]) =>
+    api.post(`/quizzes/quizzes/${id}/submit/`, { attempt_id: attemptId, responses }),
+};
+
+// Progress API
+export const progressAPI = {
+  getDashboard: () => api.get('/progress/dashboard/data/'),
+  getEnrollments: () => api.get('/progress/enrollments/'),
+  getProgress: () => api.get('/progress/progress/'),
+};
+
+// AI API
+export const aiAPI = {
+  getRecommendations: () => api.get('/ai/recommendations/'),
+  generateInterviewQuestions: (data: any) => api.post('/ai/interview/', data),
+  chat: (message: string) => api.post('/ai/chat/', { message }),
+};
+
+// CV API
+export const cvAPI = {
+  getTemplates: () => api.get('/cv/templates/'),
+  getUserCVs: () => api.get('/cv/cvs/'),
+  getCV: (id: string) => api.get(`/cv/cvs/${id}/`),
+  create: (data: any) => api.post('/cv/cvs/', data),
+  update: (id: string, data: any) => api.put(`/cv/cvs/${id}/`, data),
+  delete: (id: string) => api.delete(`/cv/cvs/${id}/`),
+  analyze: (id: string, jobDescription: string) =>
+    api.post(`/cv/cvs/${id}/analyze/`, { job_description: jobDescription }),
+  exportPDF: (id: string) => api.post(`/cv/cvs/${id}/export_pdf/`, {}, { responseType: 'blob' }),
+};
+
+// External Courses API
+export const courseAPI = {
+  // Get all external courses
+  getAll: (params?: { difficulty?: string; partner?: string }) =>
+    api.get('/external-courses/courses/', { params }),
+
+  // Get course details
+  getById: (id: string) =>
+    api.get(`/external-courses/courses/${id}/`),
+
+  // Search courses
+  search: (query: string) =>
+    api.get('/external-courses/courses/search/', { params: { q: query } }),
+
+  // Get popular courses
+  getPopular: (limit?: number) =>
+    api.get('/external-courses/courses/popular/', { params: { limit } }),
+
+  // Get courses by skills
+  getBySkills: (skills: string[]) =>
+    api.get('/external-courses/courses/by_skills/', { params: { skills: skills.join(',') } }),
+
+  // Get personalized recommendations
+  getRecommendations: () =>
+    api.get('/external-courses/recommendations/'),
+};
+
+// Admin only - trigger scraping
+export const adminCourseAPI = {
+  triggerScrape: (searchTerms: string[], maxItemsPerTerm?: number) =>
+    api.post('/external-courses/scrape/trigger/', { search_terms: searchTerms, max_items_per_term: maxItemsPerTerm }),
+
+  getScrapeLogs: () =>
+    api.get('/external-courses/logs/'),
+};
 
 export default api;

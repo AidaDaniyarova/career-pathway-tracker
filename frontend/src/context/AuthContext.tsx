@@ -1,6 +1,16 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authAPI } from '../services/api';
-import type {User} from '../types';
+
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  is_staff: boolean;
+  total_xp?: number;
+  current_level?: number;
+}
 
 interface AuthContextType {
   user: User | null;
@@ -8,6 +18,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>;
   register: (data: any) => Promise<void>;
   logout: () => void;
+  updateProfile: (data: any) => Promise<void>;
   isAdmin: boolean;
 }
 
@@ -18,13 +29,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const loadUser = () => {
-      const userStr = localStorage.getItem('user');
-      if (userStr) {
+    const loadUser = async () => {
+      const token = localStorage.getItem('access_token');
+      if (token) {
         try {
-          setUser(JSON.parse(userStr));
-        } catch (e) {
-          console.error('Failed to parse user data');
+          const response = await authAPI.getProfile();
+          setUser(response.data);
+        } catch (error) {
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
         }
       }
       setIsLoading(false);
@@ -55,10 +68,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
+  const updateProfile = async (data: any) => {
+    const response = await authAPI.updateProfile(data);
+    setUser(response.data);
+  };
+
   const isAdmin = user?.is_staff || false;
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout, isAdmin }}>
+    <AuthContext.Provider value={{ user, isLoading, login, register, logout, updateProfile, isAdmin }}>
       {children}
     </AuthContext.Provider>
   );
