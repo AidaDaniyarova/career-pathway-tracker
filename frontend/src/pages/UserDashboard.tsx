@@ -118,7 +118,6 @@ const UserDashboard: React.FC = () => {
                             </button>
                         </div>
                         <div className="flex items-center gap-4">
-                            {/*<span className="text-gray-600">Welcome, {user.username}!</span>*/}
                             {isAdmin && (
                                 <Link
                                     to="/admin"
@@ -127,12 +126,6 @@ const UserDashboard: React.FC = () => {
                                     Admin Panel
                                 </Link>
                             )}
-                            {/*<button*/}
-                            {/*    onClick={handleLogout}*/}
-                            {/*    className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"*/}
-                            {/*>*/}
-                            {/*    Logout*/}
-                            {/*</button>*/}
                         </div>
                         <div className="flex items-center space-x-3">
                             <span className="text-sm text-gray-600">{user?.username}</span>

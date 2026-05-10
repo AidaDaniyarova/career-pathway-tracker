@@ -53,6 +53,9 @@ api.interceptors.response.use(
         return Promise.reject(refreshError);
       }
     }
+    if (error.response?.status === 401) {
+      console.warn('Authentication required for this action');
+    }
     return Promise.reject(error);
   }
 );
@@ -128,23 +131,23 @@ export const adminAPI = {
 
 // Career Paths API
 export const careerAPI = {
-  getAll: () => api.get('/learning/career-paths/'),
+  getAll: (params?: any) => api.get('/learning/career-paths/', { params }),
   getById: (id: string) => api.get(`/learning/career-paths/${id}/`),
+  getIndustries: () => api.get('/learning/career-paths/industries/'),
+  getRecommended: () => api.get('/learning/career-paths/recommended/'),
   enroll: (id: string) => api.post(`/learning/career-paths/${id}/enroll/`),
-  getUserEnrollments: () => api.get('/progress/enrollments/'),
+  getProgress: (id: string) => api.get(`/learning/career-paths/${id}/progress/`),
+  getModules: (id: string) => api.get(`/learning/career-paths/${id}/modules/`),
 };
 
 // Learning Modules API
 export const moduleAPI = {
-  getAll: () => api.get('/learning/modules/'),
+  getAll: (params?: any) => api.get('/learning/modules/', { params }),
   getById: (id: string) => api.get(`/learning/modules/${id}/`),
-  start: (moduleId: string, enrollmentId?: string) =>
-    api.post('/progress/progress/start/', { module_id: moduleId, enrollment_id: enrollmentId }),
-  complete: (moduleId: string, score?: number) =>
-    api.post('/progress/progress/complete/', { module_id: moduleId, score }),
-  updateTime: (moduleId: string, seconds: number) =>
-    api.post('/progress/progress/update_time/', { module_id: moduleId, seconds }),
-  getUserProgress: () => api.get('/progress/progress/'),
+  start: (id: string) => api.post(`/learning/modules/${id}/start/`),
+  complete: (id: string) => api.post(`/learning/modules/${id}/complete/`),
+  updateTime: (id: string, seconds: number) => api.post(`/learning/modules/${id}/update-time/`, { seconds }),
+  getUserProgress: () => api.get('/progress/user-progress/'),
 };
 
 // Quizzes API
