@@ -63,7 +63,6 @@ class RegisterView(generics.CreateAPIView):
             'access': str(refresh.access_token),
             'user': {
                 'id': str(user.id),
-                'username': user.username,
                 'email': user.email,
                 'first_name': user.first_name,
                 'last_name': user.last_name,
@@ -72,28 +71,20 @@ class RegisterView(generics.CreateAPIView):
 
 
 class LoginView(APIView):
-    """JWT Login View - returns access and refresh tokens"""
+    """JWT Login View - returns access and refresh tokens using email"""
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username = request.data.get('username')
+        email = request.data.get('email')
         password = request.data.get('password')
 
-        if not username:
-            email = request.data.get('email')
-            if email:
-                try:
-                    user_obj = User.objects.get(email=email)
-                    username = user_obj.username
-                except User.DoesNotExist:
-                    pass
-
-        if not username or not password:
+        if not email or not password:
             return Response({
-                'error': 'Username/email and password are required'
+                'error': 'Email and password are required'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        user = authenticate(username=username, password=password)
+        # Authenticate using email
+        user = authenticate(request=request, username=email, password=password)
 
         if user is not None:
             if not user.is_active:
@@ -108,7 +99,6 @@ class LoginView(APIView):
                 'access': str(refresh.access_token),
                 'user': {
                     'id': str(user.id),
-                    'username': user.username,
                     'email': user.email,
                     'first_name': user.first_name,
                     'last_name': user.last_name,

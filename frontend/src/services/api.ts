@@ -62,8 +62,8 @@ api.interceptors.response.use(
 
 // Auth API
 export const authAPI = {
-  login: (username: string, password: string) =>
-    api.post('/users/login/', { username, password }),
+  login: (email: string, password: string) =>
+    api.post('/users/login/', { email, password }),
   register: (data: any) =>
     api.post('/users/register/', data),
   logout: () =>
@@ -161,9 +161,16 @@ export const quizAPI = {
 
 // Progress API
 export const progressAPI = {
-  getDashboard: () => api.get('/progress/dashboard/data/'),
+  getDashboard: () => api.get('/progress/dashboard/'),  // Changed from /progress/dashboard/data/
+  getAnalytics: () => api.get('/progress/analytics/'),
   getEnrollments: () => api.get('/progress/enrollments/'),
   getProgress: () => api.get('/progress/progress/'),
+  startModule: (moduleId: string, enrollmentId?: string) =>
+    api.post('/progress/progress/start/', { module_id: moduleId, enrollment_id: enrollmentId }),
+  completeModule: (moduleId: string, enrollmentId?: string, score?: number) =>
+    api.post('/progress/progress/complete/', { module_id: moduleId, enrollment_id: enrollmentId, score }),
+  updateTime: (moduleId: string, seconds: number, enrollmentId?: string) =>
+    api.post('/progress/progress/update-time/', { module_id: moduleId, seconds, enrollment_id: enrollmentId }),
 };
 
 // AI API

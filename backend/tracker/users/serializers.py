@@ -2,6 +2,7 @@ from rest_framework import serializers
 from progress.models import UserEnrollment
 from skills.models import UserSkill
 from users.models import User
+from skills.models import Skill
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -9,7 +10,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'full_name',
+        fields = ('id', 'email', 'first_name', 'last_name', 'full_name',
                   'profile_picture', 'education_level', 'years_experience', 'created_at')
         read_only_fields = ('created_at',)
 
@@ -24,7 +25,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'profile_picture',
+        fields = ('id', 'email', 'first_name', 'last_name', 'profile_picture',
                   'bio', 'interests', 'education_level', 'years_experience', 'current_job_title',
                   'skills', 'enrollments', 'created_at', 'total_xp', 'current_level')
 
@@ -45,16 +46,13 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'password', 'password_confirm',
+        fields = ('id', 'email', 'password', 'password_confirm',
                   'first_name', 'last_name')
         read_only_fields = ('id',)
 
     def validate(self, data):
         if data['password'] != data['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords do not match"})
-
-        if User.objects.filter(username=data['username']).exists():
-            raise serializers.ValidationError({"username": "Username already taken"})
 
         if User.objects.filter(email=data['email']).exists():
             raise serializers.ValidationError({"email": "Email already registered"})
@@ -71,7 +69,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
 
 class UserLoginSerializer(serializers.Serializer):
-    username = serializers.CharField()
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
 
@@ -94,7 +92,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'id', 'username', 'email', 'first_name', 'last_name', 'full_name',
+            'id', 'email', 'first_name', 'last_name', 'full_name',
             'profile_picture', 'bio', 'interests',
             'education_level', 'years_experience', 'current_job_title',
             'member_since', 'total_xp', 'current_level', 'is_active'
@@ -103,10 +101,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return obj.get_full_name()
-
-    def get_skills(self, obj):
-        user_skills = UserSkill.objects.filter(user=obj).select_related('skill')
-        return [{'id': str(us.skill.id), 'name': us.skill.name, 'level': us.level} for us in user_skills]
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -137,21 +131,16 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         skills_data = validated_data.pop('skills', None)
 
-        # Update regular fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
-        # Update skills if provided
         if skills_data is not None:
-            # Remove existing skills
             UserSkill.objects.filter(user=instance).delete()
-            # Add new skills
             for skill_data in skills_data:
-                skill_id = skill_data.get('id')  # Use 'id' field
+                skill_id = skill_data.get('id')
                 level = skill_data.get('level', 3)
                 if skill_id:
-                    from skills.models import Skill
                     try:
                         skill = Skill.objects.get(id=skill_id)
                         UserSkill.objects.create(
@@ -160,9 +149,10 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
                             level=level
                         )
                     except Skill.DoesNotExist:
-                        pass  # Log this error
+                        pass
 
         return instance
+
 
 class UserAvatarSerializer(serializers.ModelSerializer):
     class Meta:

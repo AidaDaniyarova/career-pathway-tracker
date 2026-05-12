@@ -50,7 +50,7 @@ const AdminDashboard: React.FC = () => {
             <p className="text-gray-400 text-sm">Admin Dashboard</p>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm">{user?.username}</span>
+            <span className="text-sm">{user?.first_name}</span>
             <Link to="/dashboard" className="text-gray-300 hover:text-white text-sm">
               Back to Site
             </Link>

@@ -199,13 +199,11 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='modules')
     def get_modules(self, request, id=None):
-        """Get all modules for a specific career path - Public access"""
         career_path = self.get_object()
         modules = CareerPathModule.objects.filter(
             career_path=career_path
         ).select_related('module').order_by('order_index')
 
-        # Check if user is authenticated
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
 
@@ -220,13 +218,11 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 'difficulty': cp_module.module.difficulty,
                 'xp_points': cp_module.module.xp_points,
                 'is_required': cp_module.module.is_required,
-                'order_index': cp_module.order_index,
-                'is_selected': True,  # All modules are selected by default
+                'is_selected': False,
                 'is_completed': False,
                 'progress_percent': 0
             }
 
-            # Add user progress if authenticated
             if is_authenticated:
                 enrollment = UserEnrollment.objects.filter(
                     user=user,
@@ -239,6 +235,7 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                         enrollment=enrollment
                     ).first()
                     if progress:
+                        module_data['is_selected'] = True
                         module_data['is_completed'] = progress.status == 'completed'
                         module_data['progress_percent'] = float(progress.progress_percent)
 
@@ -246,9 +243,89 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
         return Response(result)
 
+    @action(detail=True, methods=['post'], url_path='add-module')
+    def add_module(self, request, id=None):
+        """Add a module to the user's enrollment"""
+
+        career_path = self.get_object()
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        module_id = request.data.get('module_id')
+
+        if not module_id:
+            return Response(
+                {'error': 'module_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get enrollment
+        enrollment = UserEnrollment.objects.filter(
+            user=user,
+            career_path=career_path
+        ).first()
+
+        if not enrollment:
+            return Response(
+                {'error': 'You are not enrolled in this career path'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Get module
+        try:
+            module = LearningModule.objects.get(id=module_id)
+        except LearningModule.DoesNotExist:
+            return Response(
+                {'error': 'Module not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Verify module belongs to this career path
+        if not CareerPathModule.objects.filter(
+                career_path=career_path,
+                module=module
+        ).exists():
+            return Response(
+                {'error': 'Module does not belong to this career path'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Add module
+        progress, created = UserProgress.objects.get_or_create(
+            user=user,
+            module=module,
+            enrollment=enrollment,
+            defaults={
+                'status': 'not_started',
+                'progress_percent': 0,
+                'time_spent_seconds': 0
+            }
+        )
+
+        # Update enrollment progress
+        enrollment.update_progress()
+
+        if created:
+            return Response({
+                'message': 'Module added successfully',
+                'module_id': str(module.id),
+                'module_title': module.title
+            })
+
+        return Response({
+            'message': 'Module already exists in your learning path',
+            'module_id': str(module.id),
+            'module_title': module.title
+        })
+
     @action(detail=True, methods=['post'], url_path='edit-modules')
     def edit_modules(self, request, id=None):
-        """Edit selected modules for the user's enrollment - Requires Authentication"""
+        """Edit selected modules for the user's enrollment (add/remove courses)"""
         career_path = self.get_object()
         user = request.user
         selected_module_ids = request.data.get('selected_modules', [])
@@ -279,30 +356,47 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         # Convert selected IDs to strings for comparison
         selected_set = set(str(mid) for mid in selected_module_ids)
 
-        # Remove modules not selected by user
+        # Track changes
+        removed_count = 0
+        added_count = 0
+
+        # Remove modules not selected by user (skip required modules)
         for module_id in all_modules:
-            if str(module_id) not in selected_set:
-                UserProgress.objects.filter(
-                    user=user,
-                    module_id=module_id,
-                    enrollment=enrollment
-                ).delete()
+            module_id_str = str(module_id)
+            if module_id_str not in selected_set:
+                # Don't remove required modules
+                try:
+                    module = LearningModule.objects.get(id=module_id)
+                    if not module.is_required:
+                        deleted, _ = UserProgress.objects.filter(
+                            user=user,
+                            module_id=module_id,
+                            enrollment=enrollment
+                        ).delete()
+                        if deleted:
+                            removed_count += 1
+                except LearningModule.DoesNotExist:
+                    pass
 
         # Add newly selected modules
         for module_id in selected_set:
-            from learning.models import LearningModule
+            # Check if module exists and is part of this career path
             try:
                 module = LearningModule.objects.get(id=module_id)
-                UserProgress.objects.get_or_create(
-                    user=user,
-                    module=module,
-                    enrollment=enrollment,
-                    defaults={
-                        'status': 'not_started',
-                        'progress_percent': 0,
-                        'time_spent_seconds': 0
-                    }
-                )
+                # Verify module belongs to this career path
+                if CareerPathModule.objects.filter(career_path=career_path, module=module).exists():
+                    obj, created = UserProgress.objects.get_or_create(
+                        user=user,
+                        module=module,
+                        enrollment=enrollment,
+                        defaults={
+                            'status': 'not_started',
+                            'progress_percent': 0,
+                            'time_spent_seconds': 0
+                        }
+                    )
+                    if created:
+                        added_count += 1
             except LearningModule.DoesNotExist:
                 pass
 
@@ -314,8 +408,82 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             'enrollment_id': str(enrollment.id),
             'progress_percent': float(enrollment.progress_percent),
             'status': enrollment.status,
+            'removed_count': removed_count,
+            'added_count': added_count,
             'selected_modules_count': len(selected_set)
         })
+
+    @action(detail=True, methods=['get'], url_path='available-modules')
+    def available_modules(self, request, id=None):
+        """Get modules not yet added to user's enrollment"""
+        career_path = self.get_object()
+        enrollment_id = request.query_params.get('enrollment_id')
+
+        if not enrollment_id:
+            return Response({'error': 'enrollment_id is required'}, status=400)
+
+        # Get user's existing modules (already added)
+        existing_module_ids = set()
+        if enrollment_id and request.user.is_authenticated:
+            existing = UserProgress.objects.filter(
+                enrollment_id=enrollment_id
+            ).values_list('module_id', flat=True)
+            existing_module_ids = set(str(mid) for mid in existing)
+
+        # Also exclude completed modules? (Optional - decide if completed modules should be re-addable)
+        # For now, we exclude completed modules as well
+        completed_module_ids = set()
+        if enrollment_id and request.user.is_authenticated:
+            completed = UserProgress.objects.filter(
+                enrollment_id=enrollment_id,
+                status='completed'
+            ).values_list('module_id', flat=True)
+            completed_module_ids = set(str(mid) for mid in completed)
+
+        # Get all modules in this career path
+        all_modules = CareerPathModule.objects.filter(
+            career_path=career_path
+        ).select_related('module').order_by('order_index')
+
+        # Get search and filters from query params
+        search = request.query_params.get('search', '').lower()
+        content_type = request.query_params.get('content_type', '')
+        difficulty = request.query_params.get('difficulty', '')
+
+        result = []
+        for cp_module in all_modules:
+            module = cp_module.module
+            module_id_str = str(module.id)
+
+            # Skip already added modules AND completed modules
+            if module_id_str in existing_module_ids or module_id_str in completed_module_ids:
+                continue
+
+            # Apply search filter
+            if search and search not in module.title.lower() and search not in (module.description or '').lower():
+                continue
+
+            # Apply content type filter
+            if content_type and content_type != (module.content_type or ''):
+                continue
+
+            # Apply difficulty filter
+            if difficulty and difficulty != (module.difficulty or ''):
+                continue
+
+            result.append({
+                'id': module_id_str,
+                'title': module.title,
+                'description': module.description,
+                'content_type': module.content_type,
+                'duration_minutes': module.duration_minutes,
+                'difficulty': module.difficulty,
+                'xp_points': module.xp_points,
+                'is_required': module.is_required,
+                'order_index': cp_module.order_index
+            })
+
+        return Response(result)
 
     @action(detail=True, methods=['get'], url_path='selected-modules')
     def get_selected_modules(self, request, id=None):
@@ -411,6 +579,57 @@ class LearningModuleViewSet(viewsets.ModelViewSet):
     lookup_field = 'id'
     lookup_value_regex = '[0-9a-f-]+'
 
+    @action(detail=True, methods=['get'], url_path='modules')
+    def get_modules(self, request, id=None):
+        """Get all modules for a specific career path (for enrolled users)"""
+        career_path = self.get_object()
+        modules = CareerPathModule.objects.filter(
+            career_path=career_path
+        ).select_related('module').order_by('order_index')
+
+        user = request.user
+        is_authenticated = user is not None and user.is_authenticated
+
+        result = []
+        for cp_module in modules:
+            module_data = {
+                'id': str(cp_module.module.id),
+                'title': cp_module.module.title,
+                'description': cp_module.module.description,
+                'content_type': cp_module.module.content_type,
+                'duration_minutes': cp_module.module.duration_minutes,
+                'difficulty': cp_module.module.difficulty,
+                'xp_points': cp_module.module.xp_points,
+                'is_required': cp_module.module.is_required,
+                'order_index': cp_module.order_index,
+                'is_selected': True,
+                'is_completed': False,
+                'progress_percent': 0
+            }
+
+            # Add user progress if authenticated and enrolled
+            if is_authenticated:
+                enrollment = UserEnrollment.objects.filter(
+                    user=user,
+                    career_path=career_path
+                ).first()
+                if enrollment:
+                    progress = UserProgress.objects.filter(
+                        user=user,
+                        module=cp_module.module,
+                        enrollment=enrollment
+                    ).first()
+                    if progress:
+                        module_data['is_completed'] = progress.status == 'completed'
+                        module_data['progress_percent'] = float(progress.progress_percent)
+                        module_data['is_selected'] = True
+                    else:
+                        module_data['is_selected'] = False
+
+            result.append(module_data)
+
+        return Response(result)
+
     def get_queryset(self):
         """Filter modules based on query parameters"""
         queryset = LearningModule.objects.all()
@@ -461,6 +680,7 @@ class LearningModuleViewSet(viewsets.ModelViewSet):
                 user=user,
                 module=instance
             ).first()
+
             if progress:
                 data['user_status'] = progress.status
                 data['user_progress_percent'] = float(progress.progress_percent)

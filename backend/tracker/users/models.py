@@ -4,18 +4,15 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseU
 
 
 class UserManager(BaseUserManager):
-    """Custom user manager for the User model"""
+    """Custom user manager for the User model - using email as username"""
 
-    def create_user(self, username, email, password=None, **extra_fields):
-        """Create and save a regular user"""
+    def create_user(self, email, password=None, **extra_fields):
+        """Create and save a regular user using email"""
         if not email:
             raise ValueError('The Email field must be set')
-        if not username:
-            raise ValueError('The Username field must be set')
 
         email = self.normalize_email(email)
         user = self.model(
-            username=username,
             email=email,
             **extra_fields
         )
@@ -23,8 +20,8 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, username, email, password=None, **extra_fields):
-        """Create and save a superuser"""
+    def create_superuser(self, email, password=None, **extra_fields):
+        """Create and save a superuser using email"""
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -34,25 +31,25 @@ class UserManager(BaseUserManager):
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True.')
 
-        return self.create_user(username, email, password, **extra_fields)
+        return self.create_user(email, password, **extra_fields)
 
-    def get_by_natural_key(self, username):
+    def get_by_natural_key(self, email):
         """Required for Django's authentication system"""
-        return self.get(username=username)
+        return self.get(email=email)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    """Custom User Model"""
+    """Custom User Model - Email as primary identifier"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
-    username = models.CharField(max_length=150, unique=True)
+
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
     profile_picture = models.TextField(blank=True, null=True)
 
     # Profile fields
     bio = models.TextField(blank=True, default='')
-    interests = models.JSONField(default=list, blank=True)  # Store interests as JSON
+    interests = models.JSONField(default=list, blank=True)
     education_level = models.CharField(max_length=50, blank=True, null=True)
     years_experience = models.IntegerField(default=0)
     current_job_title = models.CharField(max_length=100, blank=True, default='')
@@ -67,32 +64,37 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'username'
-    REQUIRED_FIELDS = ['email']
+    # Use email as the unique identifier for authentication
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
 
     class Meta:
         db_table = 'users'
         indexes = [
             models.Index(fields=['email']),
-            models.Index(fields=['username']),
         ]
 
     def __str__(self):
-        return self.username
+        return self.email
 
     def get_full_name(self):
-        return f"{self.first_name} {self.last_name}".strip() or self.username
+        return f"{self.first_name} {self.last_name}".strip() or self.email
 
     def get_short_name(self):
-        return self.username
+        return self.email.split('@')[0]
 
     @property
     def full_name(self):
         return self.get_full_name()
 
     @property
+    def username(self):
+        """For backward compatibility - return email prefix"""
+        return self.email.split('@')[0]
+
+    @property
     def current_level(self):
         return (self.total_xp // 100) + 1
 
     def natural_key(self):
-        return (self.username,)
+        return (self.email,)

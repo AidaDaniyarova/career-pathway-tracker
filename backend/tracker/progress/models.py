@@ -70,10 +70,12 @@ class UserProgress(models.Model):
     time_spent_seconds = models.IntegerField(default=0)
     score = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         db_table = 'user_progress'
-        unique_together = ['user', 'module']
+        unique_together = ['user', 'module', 'enrollment']
 
     def __str__(self):
         return f"{self.user.username} - {self.module.title} ({self.status})"

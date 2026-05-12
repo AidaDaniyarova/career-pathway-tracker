@@ -19,6 +19,24 @@ from learning.models import CareerPathModule, Prerequisite
 from ai.models import Recommendation
 from skills.models import UserSkill
 
+from datetime import timedelta
+from decimal import Decimal
+from django.db.models import Sum, Count, Avg, Q, F
+from django.utils import timezone
+from rest_framework import viewsets, status, permissions
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from .models import UserEnrollment, UserProgress
+from .serializers import (
+    UserEnrollmentSerializer, UserEnrollmentDetailSerializer,
+    UserProgressSerializer, UserProgressUpdateSerializer,
+    EnrollmentProgressSerializer, DashboardSerializer
+)
+from learning.models import CareerPathModule, Prerequisite, LearningModule
+from ai.models import Recommendation
+from skills.models import UserSkill
+
 
 class UserEnrollmentViewSet(viewsets.ModelViewSet):
     """ViewSet for managing user career path enrollments"""
@@ -198,22 +216,61 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='drop')
     def drop_enrollment(self, request, id=None):
-        """Drop/cancel enrollment"""
+        """Permanently delete enrollment (hard delete)"""
         enrollment = self.get_object()
 
-        if enrollment.status == 'completed':
-            return Response(
-                {'error': 'Cannot drop a completed career path'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         enrollment.status = 'dropped'
-        enrollment.save()
+        enrollment.save(update_fields=['status'])
 
         return Response({
-            'message': f'Dropped from {enrollment.career_path.title}',
-            'status': enrollment.status
-        })
+            'message': 'Career path dropped successfully',
+            'status': 'dropped'
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='add-module')
+    def add_module(self, request, id=None):
+        """Add a module to the user's enrollment"""
+        enrollment = self.get_object()
+        module_id = request.data.get('module_id')
+
+        if not module_id:
+            return Response({'error': 'module_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            module = LearningModule.objects.get(id=module_id)
+        except LearningModule.DoesNotExist:
+            return Response({'error': 'Module not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if module belongs to this career path
+        is_module_in_path = CareerPathModule.objects.filter(
+            career_path=enrollment.career_path,
+            module=module
+        ).exists()
+
+        if not is_module_in_path:
+            return Response({
+                'error': 'This module is not part of the selected career path'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if module already exists - return success but indicate it already existed
+        progress, created = UserProgress.objects.get_or_create(
+            user=request.user,
+            module=module,
+            enrollment=enrollment,
+            defaults={
+                'status': 'not_started',
+                'progress_percent': 0,
+                'time_spent_seconds': 0
+            }
+        )
+
+        # Return success either way, but indicate if it was newly added
+        return Response({
+            'message': 'Module added successfully' if created else 'Module already in your learning path',
+            'module_id': str(module.id),
+            'module_title': module.title,
+            'already_exists': not created
+        }, status=status.HTTP_200_OK)
 
 
 class UserProgressViewSet(viewsets.ModelViewSet):
@@ -246,8 +303,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
                 {'error': 'module_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        from ..learning.models import LearningModule
         try:
             module = LearningModule.objects.get(id=module_id)
         except LearningModule.DoesNotExist:
@@ -314,7 +369,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        from ..learning.models import LearningModule
         try:
             module = LearningModule.objects.get(id=module_id)
         except LearningModule.DoesNotExist:
@@ -372,7 +426,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        from ..learning.models import LearningModule
         try:
             module = LearningModule.objects.get(id=module_id)
         except LearningModule.DoesNotExist:
@@ -424,7 +477,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        from ..learning.models import LearningModule
         try:
             module = LearningModule.objects.get(id=module_id)
         except LearningModule.DoesNotExist:
@@ -718,3 +770,82 @@ class EnrollmentProgressView(APIView):
             },
             'modules': modules_data
         })
+
+
+class ProgressAnalyticsView(APIView):
+    """Get detailed progress analytics for dashboard"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Skill development over time (monthly)
+        from django.db.models.functions import TruncMonth
+        monthly_progress = UserProgress.objects.filter(
+            user=user, status='completed'
+        ).annotate(month=TruncMonth('created_at')).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+
+        # Career paths progress
+        career_paths_progress = []
+        enrollments = UserEnrollment.objects.filter(user=user).select_related('career_path')
+        for enrollment in enrollments:
+            total = CareerPathModule.objects.filter(career_path=enrollment.career_path).count()
+            completed = UserProgress.objects.filter(
+                enrollment=enrollment, status='completed'
+            ).count()
+            career_paths_progress.append({
+                'id': str(enrollment.career_path.id),
+                'title': enrollment.career_path.title,
+                'progress_percent': float(enrollment.progress_percent),
+                'completed_modules': completed,
+                'total_modules': total
+            })
+
+        return Response({
+            'monthly_progress': list(monthly_progress),
+            'career_paths_progress': career_paths_progress,
+            'skill_distribution': self._get_skill_distribution(user),
+            'skill_development_rate': self._calculate_skill_development_rate(user)
+        })
+
+    def _get_skill_distribution(self, user):
+        skills = UserSkill.objects.filter(user=user).select_related('skill')
+        return [
+            {'name': us.skill.name, 'level': us.level, 'category': self._get_skill_category(us.skill.name)}
+            for us in skills
+        ]
+
+    def _get_skill_category(self, skill_name):
+        categories = {
+            'Programming': ['python', 'java', 'javascript', 'c++', 'c#', 'go', 'rust'],
+            'Web': ['react', 'angular', 'vue', 'html', 'css', 'django', 'flask'],
+            'Data': ['sql', 'mongodb', 'data', 'analytics', 'pandas', 'numpy'],
+            'Cloud': ['aws', 'azure', 'gcp', 'docker', 'kubernetes']
+        }
+        name_lower = skill_name.lower()
+        for cat, keywords in categories.items():
+            if any(kw in name_lower for kw in keywords):
+                return cat
+        return 'Other'
+
+    def _calculate_skill_development_rate(self, user):
+        """Calculate skill development rate over time"""
+        # Get skill additions over last 6 months
+        from datetime import timedelta
+        six_months_ago = timezone.now() - timedelta(days=180)
+        monthly_skill_growth = []
+
+        for i in range(6, 0, -1):
+            month_start = timezone.now() - timedelta(days=30 * i)
+            month_end = timezone.now() - timedelta(days=30 * (i - 1))
+            count = UserSkill.objects.filter(
+                user=user, created_at__gte=month_start, created_at__lte=month_end
+            ).count()
+            monthly_skill_growth.append({
+                'month': month_start.strftime('%B'),
+                'new_skills': count
+            })
+
+        return monthly_skill_growth

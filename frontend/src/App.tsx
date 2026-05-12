@@ -3,12 +3,8 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import UserDashboard from './pages/UserDashboard';
 import AdminDashboard from './pages/AdminDashboard';
-import UserDashboard from "./pages/UserDashboard.tsx";
-import CareerPaths from "./pages/dashboard/CareerPaths.tsx";
-import CareerPathDetail from "./pages/dashboard/CareerPathDetail.tsx";
-import LearningModules from "./pages/dashboard/LearningModules.tsx";
-import LearningModuleDetail from "./pages/dashboard/LearningModuleDetail.tsx";
 
 function App() {
   return (
@@ -16,21 +12,13 @@ function App() {
       <AuthProvider>
         <Routes>
           {/* Public Routes */}
+          <Route path="/dashboard/*" element={
+            <UserDashboard />
+          } />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route path="/career-paths" element={<CareerPaths />} />
-          <Route path="/career-paths/:id" element={<CareerPathDetail />} />
-          <Route path="/modules" element={<LearningModules />} />
-          <Route path="/modules/:id" element={<LearningModuleDetail />} />
 
-          {/* Protected Routes */}
-          <Route path="/user/dashboard/*" element={
-            <ProtectedRoute>
-              <UserDashboard />
-            </ProtectedRoute>
-          } />
-
-          {/* Admin Routes */}
+          {/* Admin Dashboard - Protected */}
           <Route path="/admin/*" element={
             <ProtectedRoute requireAdmin={true}>
               <AdminDashboard />
@@ -38,8 +26,8 @@ function App() {
           } />
 
           {/* Default Redirect */}
-          <Route path="/" element={<Navigate to="/user/dashboard" />} />
-          <Route path="*" element={<Navigate to="/user/dashboard" />} />
+          <Route path="/" element={<Navigate to="/dashboard" />} />
+          <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </AuthProvider>
     </Router>
