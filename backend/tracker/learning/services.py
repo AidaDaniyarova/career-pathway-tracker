@@ -1,8 +1,8 @@
+from django.db import transaction
 from django.db.models import Count
-
 from learning.models import CareerPath, CareerPathModule, LearningModule, Prerequisite
 from progress.models import UserProgress
-
+from progress.models import UserEnrollment
 
 class CareerPathService:
     """Career path business logic"""
@@ -60,3 +60,34 @@ class LearningModuleService:
             except UserProgress.DoesNotExist:
                 return False, prereq.prerequisite.title
         return True, None
+
+class EnrollmentService:
+
+    @staticmethod
+    @transaction.atomic
+    def enroll_user(user, career_path):
+        enrollment, created = UserEnrollment.objects.get_or_create(
+            user=user,
+            career_path=career_path,
+            defaults={
+                "status": "enrolled",
+                "progress_percent": 0
+            }
+        )
+
+        if created:
+            modules = career_path.modules.select_related("module")
+
+            UserProgress.objects.bulk_create([
+                UserProgress(
+                    user=user,
+                    module=cp.module,
+                    enrollment=enrollment,
+                    status="not_started",
+                    progress_percent=0,
+                    time_spent_seconds=0
+                )
+                for cp in modules
+            ])
+
+        return enrollment, created

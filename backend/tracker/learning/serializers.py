@@ -12,11 +12,15 @@ class CareerPathSkillSerializer(serializers.ModelSerializer):
 
 class LearningModuleSimpleSerializer(serializers.ModelSerializer):
     """Basic module info (for nested use)"""
+    is_selected = serializers.BooleanField(default=False, read_only=True)
+    is_completed = serializers.BooleanField(default=False, read_only=True)
+    progress_percent = serializers.FloatField(default=0, read_only=True)
 
     class Meta:
         model = LearningModule
         fields = ('id', 'title', 'description', 'content_type', 'duration_minutes',
-                  'difficulty', 'xp_points', 'is_required')
+                  'difficulty', 'xp_points', 'is_required',
+                  'is_selected', 'is_completed', 'progress_percent')
 
 
 class CareerPathModuleSerializer(serializers.ModelSerializer):
@@ -24,19 +28,18 @@ class CareerPathModuleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CareerPathModule
-        fields = ('id', 'module', 'order_index')
+        fields = ('id', 'module')
 
 
 class CareerPathSerializer(serializers.ModelSerializer):
-    modules = CareerPathModuleSerializer(source='careerpathmodule_set', many=True, read_only=True)
-    required_skills = CareerPathSkillSerializer(many=True, read_only=True)
+    modules_count = serializers.IntegerField(read_only=True)
     enrollment_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = CareerPath
         fields = ('id', 'title', 'slug', 'description', 'industry',
                   'avg_salary_min', 'avg_salary_max', 'growth_outlook',
-                  'modules', 'required_skills', 'enrollment_count', 'created_at')
+                  'modules_count', 'enrollment_count', 'created_at')
 
 
 class CareerPathListSerializer(serializers.ModelSerializer):
@@ -52,18 +55,29 @@ class CareerPathListSerializer(serializers.ModelSerializer):
 
 
 class CareerPathDetailSerializer(serializers.ModelSerializer):
-    """Detailed career path serializer with modules"""
-    modules = CareerPathModuleSerializer(source='careerpathmodule_set', many=True, read_only=True)
+    """Detailed career path serializer with modules and required skills"""
+    modules = serializers.SerializerMethodField()
     required_skills = CareerPathSkillSerializer(many=True, read_only=True)
+    modules_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = CareerPath
         fields = ('id', 'title', 'slug', 'description', 'industry',
                   'avg_salary_min', 'avg_salary_max', 'growth_outlook',
-                  'required_skills', 'modules', 'created_at')
+                  'required_skills', 'modules', 'modules_count', 'created_at')
+
+    def get_modules(self, obj):
+        """Get all modules for this career path with ordering"""
+        path_modules = CareerPathModule.objects.filter(
+            career_path=obj
+        ).select_related('module')
+
+        return LearningModuleSimpleSerializer(
+            [pm.module for pm in path_modules],
+            many=True
+        ).data
 
 
-# LEARNING - MODULES
 class PrerequisiteSerializer(serializers.ModelSerializer):
     prerequisite_title = serializers.ReadOnlyField(source='prerequisite.title')
 
@@ -78,4 +92,5 @@ class LearningModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = LearningModule
         fields = ('id', 'title', 'description', 'content_type', 'content_url',
-                  'duration_minutes', 'difficulty', 'xp_points', 'is_required', 'prerequisites')
+                  'duration_minutes', 'difficulty', 'xp_points', 'is_required',
+                  'prerequisites', 'created_at')

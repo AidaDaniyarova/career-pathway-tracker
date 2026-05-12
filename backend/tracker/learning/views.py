@@ -12,24 +12,20 @@ from .serializers import (
 from progress.models import UserEnrollment, UserProgress
 from progress.serializers import UserEnrollmentSerializer
 from skills.models import UserSkill
+import uuid
 
 
 class CareerPathViewSet(viewsets.ModelViewSet):
     """ViewSet for managing career paths"""
     serializer_class = CareerPathSerializer
-    lookup_field = 'id'
-    lookup_value_regex = '[0-9a-f-]+'
 
     def get_queryset(self):
-        """Filter career paths based on query parameters"""
         queryset = CareerPath.objects.all()
 
-        # Filter by industry
         industry = self.request.query_params.get('industry')
         if industry:
             queryset = queryset.filter(industry__icontains=industry)
 
-        # Filter by search term
         search = self.request.query_params.get('search')
         if search:
             queryset = queryset.filter(
@@ -37,7 +33,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 Q(description__icontains=search)
             )
 
-        # Annotate with counts
         queryset = queryset.annotate(
             modules_count=Count('modules', distinct=True),
             enrollment_count=Count('enrollments', distinct=True)
@@ -46,7 +41,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_serializer_class(self):
-        """Use appropriate serializer based on action"""
         if self.action == 'retrieve':
             return CareerPathDetailSerializer
         elif self.action == 'list':
@@ -54,31 +48,22 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         return CareerPathSerializer
 
     def get_permissions(self):
-        """
-        - Anyone can view (GET, HEAD, OPTIONS) - AllowAny
-        - Only authenticated users can enroll, edit_modules, get_selected_modules - IsAuthenticated
-        - Only admins can create/update/delete - IsAdminUser
-        """
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [permissions.IsAdminUser]
-        elif self.action in ['enroll', 'edit_modules', 'get_selected_modules']:
+        elif self.action in ['enroll', 'edit_modules', 'get_selected_modules', 'available_modules']:
             self.permission_classes = [permissions.IsAuthenticated]
         else:
-            # List and retrieve - allow anyone (no authentication required)
             self.permission_classes = [permissions.AllowAny]
         return super().get_permissions()
 
     def list(self, request, *args, **kwargs):
-        """List career paths - public access"""
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
-        """Get career path details - public access with optional user progress"""
+        """Get career path details with modules and skills"""
         instance = self.get_object()
-
-        # Check if user is authenticated (handle case when request.user is None)
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
 
@@ -101,29 +86,26 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 enrollment_progress = float(enrollment.progress_percent)
                 enrollment_id = enrollment.id
 
-                # Get user's selected modules for this enrollment
                 user_modules = UserProgress.objects.filter(
                     enrollment=enrollment
                 ).values_list('module_id', flat=True)
                 user_modules_selected = set(str(mid) for mid in user_modules)
 
-        # Serialize with user-specific data
         serializer = self.get_serializer(instance)
         data = serializer.data
 
-        # Add enrollment info (only if authenticated, otherwise false)
+        # Add enrollment info
         data['is_enrolled'] = is_enrolled if is_authenticated else False
         data['enrollment_status'] = enrollment_status if is_authenticated else None
         data['enrollment_progress'] = enrollment_progress if is_authenticated else 0
         data['enrollment_id'] = str(enrollment_id) if enrollment_id and is_authenticated else None
 
-        # Add user selection status to modules (only if authenticated)
+        # Add user selection status to modules
         for module_data in data.get('modules', []):
-            module_id = module_data.get('module', {}).get('id')
+            module_id = module_data.get('id')
             if module_id:
                 if is_authenticated and str(module_id) in user_modules_selected:
                     module_data['is_selected'] = True
-                    # Get user progress for this module
                     progress = UserProgress.objects.filter(
                         user=user,
                         module_id=module_id,
@@ -143,7 +125,7 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         return Response(data)
 
     @action(detail=True, methods=['post'], url_path='enroll')
-    def enroll(self, request, id=None):
+    def enroll(self, request, pk=None):
         """Enroll current user in this career path - Requires Authentication"""
         career_path = self.get_object()
         user = request.user
@@ -176,20 +158,26 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             progress_percent=0
         )
 
-        # By default, select all required modules
+        # Get all modules in this career path
         all_modules = CareerPathModule.objects.filter(
             career_path=career_path
         ).select_related('module')
 
+        print(f"Creating progress records for {all_modules.count()} modules")
+
+        # Create progress records for all modules
         for cp_module in all_modules:
-            UserProgress.objects.create(
+            progress, created = UserProgress.objects.get_or_create(
                 user=user,
                 module=cp_module.module,
                 enrollment=enrollment,
-                status='not_started',
-                progress_percent=0,
-                time_spent_seconds=0
+                defaults={
+                    'status': 'not_started',
+                    'progress_percent': 0,
+                    'time_spent_seconds': 0
+                }
             )
+            print(f"Module: {cp_module.module.title} - Created: {created}")
 
         serializer = UserEnrollmentSerializer(enrollment)
         return Response({
@@ -198,7 +186,8 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='modules')
-    def get_modules(self, request, id=None):
+    def get_modules(self, request, pk=None):
+        """Get all modules for a specific career path"""
         career_path = self.get_object()
         modules = CareerPathModule.objects.filter(
             career_path=career_path
@@ -207,46 +196,48 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
 
+        # Get user's enrollment for this career path
+        enrollment = None
+        user_progress_map = {}
+
+        if is_authenticated:
+            enrollment = UserEnrollment.objects.filter(
+                user=user,
+                career_path=career_path
+            ).first()
+
+            if enrollment:
+                # Get all user progress for this enrollment
+                user_progress = UserProgress.objects.filter(enrollment=enrollment)
+                for progress in user_progress:
+                    user_progress_map[str(progress.module.id)] = progress
+
         result = []
         for cp_module in modules:
-            module_data = {
-                'id': str(cp_module.module.id),
-                'title': cp_module.module.title,
-                'description': cp_module.module.description,
-                'content_type': cp_module.module.content_type,
-                'duration_minutes': cp_module.module.duration_minutes,
-                'difficulty': cp_module.module.difficulty,
-                'xp_points': cp_module.module.xp_points,
-                'is_required': cp_module.module.is_required,
-                'is_selected': False,
-                'is_completed': False,
-                'progress_percent': 0
-            }
+            module = cp_module.module
+            progress = user_progress_map.get(str(module.id))
 
-            if is_authenticated:
-                enrollment = UserEnrollment.objects.filter(
-                    user=user,
-                    career_path=career_path
-                ).first()
-                if enrollment:
-                    progress = UserProgress.objects.filter(
-                        user=user,
-                        module=cp_module.module,
-                        enrollment=enrollment
-                    ).first()
-                    if progress:
-                        module_data['is_selected'] = True
-                        module_data['is_completed'] = progress.status == 'completed'
-                        module_data['progress_percent'] = float(progress.progress_percent)
+            module_data = {
+                'id': str(module.id),
+                'title': module.title,
+                'description': module.description,
+                'content_type': module.content_type,
+                'duration_minutes': module.duration_minutes,
+                'difficulty': module.difficulty,
+                'xp_points': module.xp_points,
+                'is_required': module.is_required,
+                'order_index': cp_module.order_index,
+                'is_selected': progress is not None,
+                'is_completed': progress.status == 'completed' if progress else False,
+                'progress_percent': float(progress.progress_percent) if progress else 0
+            }
 
             result.append(module_data)
 
         return Response(result)
 
     @action(detail=True, methods=['post'], url_path='add-module')
-    def add_module(self, request, id=None):
-        """Add a module to the user's enrollment"""
-
+    def add_module(self, request, pk=None):
         career_path = self.get_object()
         user = request.user
 
@@ -264,7 +255,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get enrollment
         enrollment = UserEnrollment.objects.filter(
             user=user,
             career_path=career_path
@@ -276,7 +266,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Get module
         try:
             module = LearningModule.objects.get(id=module_id)
         except LearningModule.DoesNotExist:
@@ -285,7 +274,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Verify module belongs to this career path
         if not CareerPathModule.objects.filter(
                 career_path=career_path,
                 module=module
@@ -295,7 +283,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Add module
         progress, created = UserProgress.objects.get_or_create(
             user=user,
             module=module,
@@ -307,7 +294,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             }
         )
 
-        # Update enrollment progress
         enrollment.update_progress()
 
         if created:
@@ -324,8 +310,7 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=['post'], url_path='edit-modules')
-    def edit_modules(self, request, id=None):
-        """Edit selected modules for the user's enrollment (add/remove courses)"""
+    def edit_modules(self, request, pk=None):
         career_path = self.get_object()
         user = request.user
         selected_module_ids = request.data.get('selected_modules', [])
@@ -336,7 +321,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Get user's enrollment
         enrollment = UserEnrollment.objects.filter(
             user=user,
             career_path=career_path
@@ -348,23 +332,18 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Get all modules in this career path
         all_modules = CareerPathModule.objects.filter(
             career_path=career_path
         ).values_list('module_id', flat=True)
 
-        # Convert selected IDs to strings for comparison
         selected_set = set(str(mid) for mid in selected_module_ids)
 
-        # Track changes
         removed_count = 0
         added_count = 0
 
-        # Remove modules not selected by user (skip required modules)
         for module_id in all_modules:
             module_id_str = str(module_id)
             if module_id_str not in selected_set:
-                # Don't remove required modules
                 try:
                     module = LearningModule.objects.get(id=module_id)
                     if not module.is_required:
@@ -378,12 +357,9 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 except LearningModule.DoesNotExist:
                     pass
 
-        # Add newly selected modules
         for module_id in selected_set:
-            # Check if module exists and is part of this career path
             try:
                 module = LearningModule.objects.get(id=module_id)
-                # Verify module belongs to this career path
                 if CareerPathModule.objects.filter(career_path=career_path, module=module).exists():
                     obj, created = UserProgress.objects.get_or_create(
                         user=user,
@@ -400,7 +376,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             except LearningModule.DoesNotExist:
                 pass
 
-        # Update enrollment progress
         enrollment.update_progress()
 
         return Response({
@@ -414,80 +389,85 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=['get'], url_path='available-modules')
-    def available_modules(self, request, id=None):
-        """Get modules not yet added to user's enrollment"""
+    def available_modules(self, request, pk=None):
         career_path = self.get_object()
         enrollment_id = request.query_params.get('enrollment_id')
 
-        if not enrollment_id:
-            return Response({'error': 'enrollment_id is required'}, status=400)
+        enrollment_obj = None
 
-        # Get user's existing modules (already added)
-        existing_module_ids = set()
-        if enrollment_id and request.user.is_authenticated:
-            existing = UserProgress.objects.filter(
-                enrollment_id=enrollment_id
+        if enrollment_id:
+            enrollment_id = enrollment_id.strip().rstrip('/')
+
+            try:
+                enrollment_uuid = uuid.UUID(enrollment_id)
+            except ValueError:
+                return Response(
+                    {"error": "Invalid enrollment_id UUID"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if request.user.is_authenticated:
+                enrollment_obj = UserEnrollment.objects.filter(
+                    id=enrollment_uuid,
+                    user=request.user,
+                    career_path=career_path
+                ).first()
+
+        path_module_ids = set(
+            CareerPathModule.objects.filter(
+                career_path=career_path
             ).values_list('module_id', flat=True)
-            existing_module_ids = set(str(mid) for mid in existing)
+        )
 
-        # Also exclude completed modules? (Optional - decide if completed modules should be re-addable)
-        # For now, we exclude completed modules as well
+        user_module_ids = set()
         completed_module_ids = set()
-        if enrollment_id and request.user.is_authenticated:
-            completed = UserProgress.objects.filter(
-                enrollment_id=enrollment_id,
-                status='completed'
-            ).values_list('module_id', flat=True)
-            completed_module_ids = set(str(mid) for mid in completed)
 
-        # Get all modules in this career path
-        all_modules = CareerPathModule.objects.filter(
-            career_path=career_path
-        ).select_related('module').order_by('order_index')
+        if enrollment_obj:
+            qs = UserProgress.objects.filter(enrollment=enrollment_obj)
+            user_module_ids = set(qs.values_list('module_id', flat=True))
+            completed_module_ids = set(
+                qs.filter(status='completed').values_list('module_id', flat=True)
+            )
 
-        # Get search and filters from query params
+        modules = LearningModule.objects.filter(id__in=path_module_ids)
+
         search = request.query_params.get('search', '').lower()
-        content_type = request.query_params.get('content_type', '')
-        difficulty = request.query_params.get('difficulty', '')
+        content_type = request.query_params.get('content_type')
+        difficulty = request.query_params.get('difficulty')
 
         result = []
-        for cp_module in all_modules:
-            module = cp_module.module
-            module_id_str = str(module.id)
 
-            # Skip already added modules AND completed modules
-            if module_id_str in existing_module_ids or module_id_str in completed_module_ids:
+        for module in modules:
+            module_id = module.id
+
+            # Exclude if already selected OR completed
+            if str(module_id) in user_module_ids or str(module_id) in completed_module_ids:
                 continue
 
-            # Apply search filter
             if search and search not in module.title.lower() and search not in (module.description or '').lower():
                 continue
 
-            # Apply content type filter
-            if content_type and content_type != (module.content_type or ''):
+            if content_type and module.content_type != content_type:
                 continue
 
-            # Apply difficulty filter
-            if difficulty and difficulty != (module.difficulty or ''):
+            if difficulty and module.difficulty != difficulty:
                 continue
 
             result.append({
-                'id': module_id_str,
-                'title': module.title,
-                'description': module.description,
-                'content_type': module.content_type,
-                'duration_minutes': module.duration_minutes,
-                'difficulty': module.difficulty,
-                'xp_points': module.xp_points,
-                'is_required': module.is_required,
-                'order_index': cp_module.order_index
+                "id": str(module_id),
+                "title": module.title,
+                "description": module.description,
+                "content_type": module.content_type,
+                "duration_minutes": module.duration_minutes,
+                "difficulty": module.difficulty,
+                "xp_points": module.xp_points,
+                "is_required": module.is_required
             })
 
         return Response(result)
 
     @action(detail=True, methods=['get'], url_path='selected-modules')
-    def get_selected_modules(self, request, id=None):
-        """Get user's selected modules for this career path - Requires Authentication"""
+    def get_selected_modules(self, request, pk=None):
         career_path = self.get_object()
         user = request.user
 
@@ -531,18 +511,15 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='industries')
     def list_industries(self, request):
-        """Get list of all industries - Public access"""
         industries = CareerPath.objects.exclude(
             industry__isnull=True
         ).exclude(
             industry=''
         ).values_list('industry', flat=True).distinct()
-
         return Response(list(industries))
 
     @action(detail=False, methods=['get'], url_path='recommended')
     def recommended(self, request):
-        """Get recommended career paths based on user's skills or popular paths"""
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
 
@@ -564,7 +541,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                     enrollment_count=Count('enrollments')
                 ).order_by('-enrollment_count')[:10]
         else:
-            # For non-authenticated users, return popular paths
             queryset = CareerPath.objects.annotate(
                 enrollment_count=Count('enrollments')
             ).order_by('-enrollment_count')[:10]
@@ -574,18 +550,17 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
 
 class LearningModuleViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing learning modules"""
     serializer_class = LearningModuleSerializer
     lookup_field = 'id'
     lookup_value_regex = '[0-9a-f-]+'
 
     @action(detail=True, methods=['get'], url_path='modules')
-    def get_modules(self, request, id=None):
+    def get_modules(self, request, pk=None):
         """Get all modules for a specific career path (for enrolled users)"""
         career_path = self.get_object()
         modules = CareerPathModule.objects.filter(
             career_path=career_path
-        ).select_related('module').order_by('order_index')
+        ).select_related('module')
 
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
@@ -601,7 +576,6 @@ class LearningModuleViewSet(viewsets.ModelViewSet):
                 'difficulty': cp_module.module.difficulty,
                 'xp_points': cp_module.module.xp_points,
                 'is_required': cp_module.module.is_required,
-                'order_index': cp_module.order_index,
                 'is_selected': True,
                 'is_completed': False,
                 'progress_percent': 0
@@ -631,25 +605,16 @@ class LearningModuleViewSet(viewsets.ModelViewSet):
         return Response(result)
 
     def get_queryset(self):
-        """Filter modules based on query parameters"""
         queryset = LearningModule.objects.all()
 
-        # Filter by content type
         content_type = self.request.query_params.get('content_type')
         if content_type:
             queryset = queryset.filter(content_type=content_type)
 
-        # Filter by difficulty
         difficulty = self.request.query_params.get('difficulty')
         if difficulty:
             queryset = queryset.filter(difficulty=difficulty)
 
-        # Filter by required
-        is_required = self.request.query_params.get('is_required')
-        if is_required is not None:
-            queryset = queryset.filter(is_required=is_required.lower() == 'true')
-
-        # Search by title
         search = self.request.query_params.get('search')
         if search:
             queryset = queryset.filter(title__icontains=search)
@@ -657,21 +622,17 @@ class LearningModuleViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_permissions(self):
-        """Allow write operations only for staff, view for anyone"""
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             self.permission_classes = [permissions.IsAdminUser]
         else:
-            # List and retrieve - allow anyone
             self.permission_classes = [permissions.AllowAny]
         return super().get_permissions()
 
     def retrieve(self, request, *args, **kwargs):
-        """Get module details - public access"""
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         data = serializer.data
 
-        # Add user-specific progress if authenticated
         user = request.user
         is_authenticated = user is not None and user.is_authenticated
 

@@ -61,7 +61,6 @@ const CareerPathDetail: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      // Don't send Authorization header if no token
       const config: any = {};
       if (token) {
         config.headers = { Authorization: `Bearer ${token}` };
@@ -91,7 +90,6 @@ const CareerPathDetail: React.FC = () => {
 
   const handleEnroll = async () => {
     if (!token) {
-      // Redirect to login if not authenticated
       window.location.href = '/login';
       return;
     }
@@ -142,21 +140,42 @@ const CareerPathDetail: React.FC = () => {
   };
 
   const startModule = async (moduleId: string) => {
-    if (!token) {
-      window.location.href = '/login';
-      return;
+  if (!token) {
+    window.location.href = '/login';
+    return;
+  }
+
+  try {
+    console.log('Starting module:', moduleId);
+    console.log('With enrollment_id:', path?.enrollment_id);
+
+    const requestBody: any = {
+      module_id: moduleId
+    };
+
+    if (path?.enrollment_id) {
+      requestBody.enrollment_id = path.enrollment_id;
     }
 
-    try {
-      await axios.post('/api/progress/progress/start/',
-        { module_id: moduleId, enrollment_id: path?.enrollment_id },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      navigate(`/dashboard/learning/${moduleId}`);
-    } catch (err) {
-      console.error('Failed to start module:', err);
-    }
-  };
+    const response = await axios.post('/api/progress/progress/start/', requestBody, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('Start response:', response.data);
+
+    navigate(`/dashboard/learning/${moduleId}`, {
+      state: {
+        enrollment_id: response.data.enrollment_id || path?.enrollment_id
+      }
+    });
+  } catch (err: any) {
+    console.error('Failed to start module:', err);
+    alert(err.response?.data?.error || 'Failed to start module');
+  }
+};
 
   if (loading) {
     return (

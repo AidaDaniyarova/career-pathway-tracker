@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from learning.models import CareerPathModule
 
 
 class UserEnrollment(models.Model):
@@ -30,19 +31,21 @@ class UserEnrollment(models.Model):
         return self.status == 'completed'
 
     def update_progress(self):
-        """Update progress based on completed modules in user's selected modules"""
-        # Get only the modules the user has selected (has progress records)
-        user_modules = UserProgress.objects.filter(
-            user=self.user,
-            enrollment=self
-        )
+        """Update progress based on completed modules in this enrollment"""
+        # Get all modules in this career path
+        total_modules = CareerPathModule.objects.filter(career_path=self.career_path).count()
 
-        total_modules = user_modules.count()
-        if total_modules == 0:
-            self.progress_percent = 0
+        # Get completed modules for this specific enrollment
+        completed_modules = UserProgress.objects.filter(
+            user=self.user,
+            enrollment=self,
+            status='completed'
+        ).count()
+
+        if total_modules > 0:
+            self.progress_percent = (completed_modules / total_modules) * 100
         else:
-            completed = user_modules.filter(status='completed').count()
-            self.progress_percent = (completed / total_modules) * 100
+            self.progress_percent = 0
 
         if self.progress_percent >= 100 and self.status != 'completed':
             self.status = 'completed'
@@ -50,6 +53,7 @@ class UserEnrollment(models.Model):
             self.status = 'in_progress'
 
         self.save(update_fields=['progress_percent', 'status'])
+        print(f"Enrollment {self.id} progress updated to {self.progress_percent}%")
 
 
 class UserProgress(models.Model):
