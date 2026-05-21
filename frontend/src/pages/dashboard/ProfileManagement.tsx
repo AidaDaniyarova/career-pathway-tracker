@@ -50,9 +50,7 @@ const ProfileManagement: React.FC = () => {
 
   const fetchProfile = async () => {
     try {
-      console.log("Fetching profile...");
       const response = await api.get('/users/profile/');
-      console.log("PROFILE RESPONSE:", response.data);
 
       setProfile({
         first_name: response.data.first_name || '',
@@ -76,7 +74,6 @@ const ProfileManagement: React.FC = () => {
   const fetchAvailableSkills = async () => {
     try {
       const response = await api.get('/skills/skills/');
-      console.log('Available skills:', response.data);
 
       // Handle different response formats
       let skillsArray = [];
@@ -118,10 +115,8 @@ const ProfileManagement: React.FC = () => {
         skills: skillsData
       };
 
-      console.log('Sending update data:', updateData); // Debug log
 
       const response = await api.put('/users/profile/', updateData);
-      console.log('Update response:', response.data);
 
       setMessage({ type: 'success', text: 'Profile updated successfully!' });
 

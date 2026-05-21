@@ -21,10 +21,10 @@ router.register('modules', LearningModuleAdminViewSet, basename='admin-modules')
 router.register('prerequisites', PrerequisiteAdminViewSet, basename='admin-prerequisites')
 
 # Quiz management
-router.register('quizzes', QuizAdminViewSet, basename='admin-quizzes')
-router.register('questions', QuestionAdminViewSet, basename='admin-questions')
-router.register('question-options', QuestionOptionAdminViewSet, basename='admin-question-options')
-router.register('quiz-attempts', QuizAttemptAdminViewSet, basename='admin-quiz-attempts')
+router.register('quizzes', CareerQuizAdminViewSet, basename='admin-quizzes')
+router.register('questions', QuizQuestionAdminViewSet, basename='admin-questions')
+router.register('options', QuizOptionAdminViewSet, basename='admin-options')
+router.register('responses', QuizResponseAdminViewSet, basename='admin-responses')
 
 # Progress management
 router.register('enrollments', UserEnrollmentAdminViewSet, basename='admin-enrollments')

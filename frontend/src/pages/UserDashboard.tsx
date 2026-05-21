@@ -1,9 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import axios from 'axios';
-
-// Import all dashboard sections
+import {Routes, Route, Link, useNavigate, useLocation} from 'react-router-dom';
+import {useAuth} from '../context/AuthContext';
 import DashboardHome from './dashboard/DashboardHome';
 import ProfileManagement from './dashboard/ProfileManagement';
 import CareerPaths from './dashboard/CareerPaths';
@@ -17,15 +13,14 @@ import CVBuilder from './dashboard/CVBuilder';
 import CVEdit from './dashboard/CVEdit';
 import JobScanner from './dashboard/JobScanner';
 import InterviewGenerator from './dashboard/InterviewGenerator';
-import ChatAssistant from './dashboard/ChatAssistant';
 import ProgressDashboard from './dashboard/ProgressDashboard';
 import Recommendations from './dashboard/Recommendations';
+import {useEffect} from "react";
 
 const UserDashboard: React.FC = () => {
-    const { user, logout, isAdmin } = useAuth();
+    const {user, logout, isAdmin} = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const [notifications, setNotifications] = useState<string[]>([]);
     const isAuthenticated = !!user;
 
     const handleLogout = () => {
@@ -34,17 +29,16 @@ const UserDashboard: React.FC = () => {
     };
 
     const menuItems = [
-        { path: '/dashboard', label: '🏠 Home', icon: '🏠', public: true },
-        { path: '/dashboard/profile', label: '👤 Profile', icon: '👤', public: false },
-        { path: '/dashboard/progress', label: '📊 Progress', icon: '📊', public: false },
-        { path: '/dashboard/career-paths', label: '🎯 Career Paths', icon: '🎯', public: true },
-        { path: '/dashboard/learning', label: '📚 Learning', icon: '📚', public: true },
-        { path: '/dashboard/quizzes', label: '📝 Quizzes', icon: '📝', public: true },
-        { path: '/dashboard/recommendations', label: '✨ Recommendations', icon: '✨', public: false },
-        { path: '/dashboard/cv-builder', label: '📄 CV Builder', icon: '📄', public: false },
-        { path: '/dashboard/job-scanner', label: '🔍 Job Scanner', icon: '🔍', public: false },
-        { path: '/dashboard/interview', label: '💬 Interview Help', icon: '💬', public: true },
-        { path: '/dashboard/chat', label: '🤖 AI Assistant', icon: '🤖', public: true },
+        {path: '/dashboard', label: '🏠 Home', icon: '🏠', public: true},
+        {path: '/dashboard/profile', label: '👤 Profile', icon: '👤', public: false},
+        {path: '/dashboard/progress', label: '📊 Progress', icon: '📊', public: false},
+        {path: '/dashboard/career-paths', label: '🎯 Career Paths', icon: '🎯', public: true},
+        {path: '/dashboard/learning', label: '📚 Learning', icon: '📚', public: true},
+        {path: '/dashboard/quizzes', label: '📝 Quizzes', icon: '📝', public: true},
+        {path: '/dashboard/recommendations', label: '✨ Recommendations', icon: '✨', public: false},
+        {path: '/dashboard/cv-builder', label: '📄 CV Builder', icon: '📄', public: false},
+        {path: '/dashboard/job-scanner', label: '🔍 Job Scanner', icon: '🔍', public: false},
+        {path: '/dashboard/interview', label: '💬 Interview Help', icon: '💬', public: true},
     ];
 
     const currentPath = location.pathname;
@@ -52,23 +46,16 @@ const UserDashboard: React.FC = () => {
     // Filter menu items based on authentication
     const visibleMenuItems = menuItems.filter(item => item.public || isAuthenticated);
 
-    // Fetch notifications only if authenticated
     useEffect(() => {
-        if (isAuthenticated) {
-            const fetchNotifications = async () => {
-                try {
-                    const token = localStorage.getItem('access_token');
-                    const response = await axios.get('/api/notifications/', {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    setNotifications(response.data);
-                } catch (err) {
-                    console.error('Failed to fetch notifications:', err);
-                }
-            };
-            fetchNotifications();
-        }
-    }, [isAuthenticated]);
+      // Check if user just completed a quiz
+      const quizCompleted = sessionStorage.getItem('quiz_completed');
+      if (quizCompleted === 'true' && window.location.pathname === '/dashboard/recommendations') {
+        sessionStorage.removeItem('quiz_completed');
+        // Force refresh of recommendations
+        const event = new Event('quiz-completed');
+        window.dispatchEvent(event);
+      }
+    }, []);
 
     return (
         <div className="min-h-screen bg-gray-100">
@@ -96,13 +83,12 @@ const UserDashboard: React.FC = () => {
                                     <button className="px-3 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100">
                                         More ▼
                                     </button>
-                                    <div className="absolute hidden group-hover:block bg-white shadow-lg rounded-lg mt-1 w-48 z-10">
+
+                                    <div className="absolute left-0 top-full invisible opacity-0 group-hover:visible group-hover:opacity-100
+                                            transition-all duration-150 bg-white shadow-lg rounded-lg w-48 z-50 border border-gray-200">
                                         {visibleMenuItems.slice(5).map((item) => (
-                                            <Link
-                                                key={item.path}
-                                                to={item.path}
-                                                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                            >
+                                            <Link key={item.path} to={item.path}
+                                                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                                                 {item.label}
                                             </Link>
                                         ))}
@@ -112,20 +98,6 @@ const UserDashboard: React.FC = () => {
                         </div>
                     </div>
                     <div className="flex items-center space-x-4">
-                        {/* Notifications - only for authenticated users */}
-                        {isAuthenticated && (
-                            <div className="relative">
-                                <button className="text-gray-600 hover:text-gray-800">
-                                    🔔
-                                    {notifications.length > 0 && (
-                                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
-                                            {notifications.length}
-                                        </span>
-                                    )}
-                                </button>
-                            </div>
-                        )}
-
                         {isAdmin && isAuthenticated && (
                             <Link
                                 to="/admin"
@@ -168,22 +140,21 @@ const UserDashboard: React.FC = () => {
             {/* Main Content */}
             <main className="container mx-auto px-4 py-6">
                 <Routes>
-                    <Route index element={<DashboardHome />} />
-                    <Route path="profile" element={<ProfileManagement />} />
-                    <Route path="progress" element={<ProgressDashboard />} />
-                    <Route path="career-paths" element={<CareerPaths />} />
-                    <Route path="career-paths/:id" element={<CareerPathDetail />} />
-                    <Route path="learning" element={<LearningModules />} />
-                    <Route path="learning/:id" element={<LearningModuleDetail />} />
-                    <Route path="quizzes" element={<QuizEngine />} />
-                    <Route path="quizzes/take/:id" element={<QuizTake />} />
-                    <Route path="quizzes/results/:id" element={<QuizResults />} />
-                    <Route path="recommendations" element={<Recommendations />} />
-                    <Route path="cv-builder" element={<CVBuilder />} />
-                    <Route path="cv-builder/edit/:id" element={<CVEdit />} />
-                    <Route path="job-scanner" element={<JobScanner />} />
-                    <Route path="interview" element={<InterviewGenerator />} />
-                    <Route path="chat" element={<ChatAssistant />} />
+                    <Route index element={<DashboardHome/>}/>
+                    <Route path="profile" element={<ProfileManagement/>}/>
+                    <Route path="progress" element={<ProgressDashboard/>}/>
+                    <Route path="career-paths" element={<CareerPaths/>}/>
+                    <Route path="career-paths/:id" element={<CareerPathDetail/>}/>
+                    <Route path="learning" element={<LearningModules/>}/>
+                    <Route path="learning/:id" element={<LearningModuleDetail/>}/>
+                    <Route path="quizzes" element={<QuizEngine/>}/>
+                    <Route path="quizzes/take/:id" element={<QuizTake/>}/>
+                    <Route path="quizzes/results/:id" element={<QuizResults/>}/>
+                    <Route path="recommendations" element={<Recommendations/>}/>
+                    <Route path="cv-builder" element={<CVBuilder/>}/>
+                    <Route path="cv-builder/edit/:id" element={<CVEdit/>}/>
+                    <Route path="job-scanner" element={<JobScanner/>}/>
+                    <Route path="interview" element={<InterviewGenerator/>}/>
                 </Routes>
             </main>
         </div>

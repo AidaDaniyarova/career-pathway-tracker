@@ -9,16 +9,14 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from users.models import User
-from .serializers import (
-    UserSerializer, UserDetailSerializer, ChangePasswordSerializer,
-    UserProfileUpdateSerializer, UserProfileSerializer, UserAvatarSerializer,
-    UserRegisterSerializer
-)
+from .serializers import (UserSerializer, UserDetailSerializer, ChangePasswordSerializer,
+                          UserProfileUpdateSerializer, UserProfileSerializer,
+                          UserAvatarSerializer, UserRegisterSerializer)
 from progress.models import UserEnrollment, UserProgress
 from skills.models import UserSkill
-from assessment.models import QuizAttempt
 from ai.models import Recommendation
 from cv.models import CV
+from quizzes.models import QuizResponse
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -228,7 +226,7 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             user=user
         ).exclude(status='not_started').count()
         total_xp = user.total_xp
-        quiz_attempts = QuizAttempt.objects.filter(user=user)
+        quiz_attempts = QuizResponse.objects.filter(user=user)
         avg_quiz_score = quiz_attempts.aggregate(Avg('score'))['score__avg'] or 0
         total_quizzes = quiz_attempts.count()
         cv_count = CV.objects.filter(user=user).count()

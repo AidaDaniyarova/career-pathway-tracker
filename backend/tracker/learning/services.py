@@ -61,6 +61,7 @@ class LearningModuleService:
                 return False, prereq.prerequisite.title
         return True, None
 
+
 class EnrollmentService:
 
     @staticmethod
@@ -78,16 +79,33 @@ class EnrollmentService:
         if created:
             modules = career_path.modules.select_related("module")
 
-            UserProgress.objects.bulk_create([
-                UserProgress(
+            # Find all modules the user has already completed anywhere across the system
+            completed_module_ids = set(
+                UserProgress.objects.filter(
                     user=user,
-                    module=cp.module,
-                    enrollment=enrollment,
-                    status="not_started",
-                    progress_percent=0,
-                    time_spent_seconds=0
+                    status="completed"
+                ).values_list("module_id", flat=True)
+            )
+
+            progress_instances = []
+            for cp in modules:
+                is_completed = cp.module.id in completed_module_ids
+
+                progress_instances.append(
+                    UserProgress(
+                        user=user,
+                        module=cp.module,
+                        enrollment=enrollment,
+                        status="completed" if is_completed else "not_started",
+                        progress_percent=100 if is_completed else 0,
+                        time_spent_seconds=0
+                    )
                 )
-                for cp in modules
-            ])
+
+            # Efficiently write all initial tracking states
+            UserProgress.objects.bulk_create(progress_instances)
+
+            # Run the dynamic progress engine calculation we fixed earlier
+            enrollment.update_progress()
 
         return enrollment, created

@@ -1,14 +1,71 @@
-from ai.models import Recommendation
-from learning.models import CareerPathModule
+from django.db.models import Sum, Q
 from progress.models import UserEnrollment, UserProgress
+from learning.models import CareerPathModule
+from ai.models import Recommendation
 
 
 class ProgressService:
-    """User progress business logic"""
+    @staticmethod
+    def recalculate_enrollment(enrollment):
+        """
+        DYNAMIC SOURCE OF TRUTH:
+        - TOTAL modules = Count of UserProgress records tied to this enrollment
+        - COMPLETED = Count of those records marked 'completed'
+        """
+        total_modules = UserProgress.objects.filter(enrollment=enrollment).count()
+
+        completed_modules = UserProgress.objects.filter(
+            enrollment=enrollment,
+            status="completed"
+        ).count()
+
+        if total_modules == 0:
+            enrollment.progress_percent = 0
+            enrollment.status = "enrolled"
+            enrollment.save(update_fields=["progress_percent", "status"])
+            return
+
+        progress_percent = (completed_modules / total_modules) * 100
+
+        if completed_modules == total_modules:
+            enrollment.status = "completed"
+            progress_percent = 100
+        elif completed_modules > 0:
+            enrollment.status = "in_progress"
+        else:
+            enrollment.status = "enrolled"
+
+        enrollment.progress_percent = round(progress_percent, 2)
+        enrollment.save(update_fields=["progress_percent", "status"])
+
+    @staticmethod
+    def update_enrollment_progress(user, enrollment_id):
+        enrollment = UserEnrollment.objects.filter(
+            id=enrollment_id,
+            user=user
+        ).first()
+
+        if enrollment:
+            ProgressService.recalculate_enrollment(enrollment)
+
+    @staticmethod
+    def is_module_completed_globally(user, module):
+        return UserProgress.objects.filter(
+            user=user,
+            module=module,
+            status="completed"
+        ).exists()
+
+    @staticmethod
+    def recalculate_all_user_enrollments(user):
+        """Recalculate progress for all user enrollments"""
+        enrollments = UserEnrollment.objects.filter(user=user)
+        for enrollment in enrollments:
+            ProgressService.recalculate_enrollment(enrollment)
 
     @staticmethod
     def enroll_user(user, career_path_id):
-        """Enroll user in a career path"""
+        """Enroll user in a career path and create progress records for ALL modules"""
         enrollment, created = UserEnrollment.objects.get_or_create(
             user=user,
             career_path_id=career_path_id,
@@ -16,7 +73,7 @@ class ProgressService:
         )
 
         if created:
-            # Create progress records for all modules in this path
+            # Create progress records for ALL modules in this path
             modules = CareerPathModule.objects.filter(
                 career_path_id=career_path_id
             ).select_related('module')
@@ -33,7 +90,7 @@ class ProgressService:
 
     @staticmethod
     def update_module_progress(user, module_id, enrollment_id, progress_data):
-        """Update progress for a specific module"""
+        """Update progress for a specific module and recalculate enrollment progress"""
         progress, created = UserProgress.objects.update_or_create(
             user=user,
             module_id=module_id,
@@ -42,38 +99,10 @@ class ProgressService:
         )
 
         # Update overall enrollment progress
-        if progress_data.get('status') == 'completed':
+        if enrollment_id:
             ProgressService.update_enrollment_progress(user, enrollment_id)
 
         return progress
-
-    @staticmethod
-    def update_enrollment_progress(user, enrollment_id):
-        """Calculate and update overall progress for an enrollment"""
-        enrollment = UserEnrollment.objects.get(id=enrollment_id, user=user)
-
-        # Get all modules in this career path
-        total_modules = CareerPathModule.objects.filter(
-            career_path=enrollment.career_path
-        ).count()
-
-        # Get completed modules
-        completed_modules = UserProgress.objects.filter(
-            user=user,
-            enrollment=enrollment,
-            status='completed'
-        ).count()
-
-        if total_modules > 0:
-            progress = (completed_modules / total_modules) * 100
-            enrollment.progress_percent = progress
-
-            if progress == 100:
-                enrollment.status = 'completed'
-
-            enrollment.save()
-
-        return enrollment
 
     @staticmethod
     def get_user_dashboard(user):

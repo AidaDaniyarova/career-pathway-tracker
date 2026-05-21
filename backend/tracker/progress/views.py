@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from django.db.models import Sum, Count, Avg, Q, F
+from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
@@ -9,12 +10,11 @@ from rest_framework.views import APIView
 from .models import UserEnrollment, UserProgress
 from .serializers import (
     UserEnrollmentSerializer, UserEnrollmentDetailSerializer,
-    UserProgressSerializer, UserProgressUpdateSerializer,
-    EnrollmentProgressSerializer, DashboardSerializer
-)
+    UserProgressSerializer, UserProgressUpdateSerializer)
 from learning.models import CareerPathModule, Prerequisite, LearningModule
 from ai.models import Recommendation
 from skills.models import UserSkill
+from .services import ProgressService
 
 
 class UserEnrollmentViewSet(viewsets.ModelViewSet):
@@ -33,23 +33,40 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
         return UserEnrollmentSerializer
 
     def perform_create(self, serializer):
+        # Save the master tracking record first
         enrollment = serializer.save(user=self.request.user)
         career_path = enrollment.career_path
+
+        # Pull down the base track manifest items
         modules = CareerPathModule.objects.filter(
             career_path=career_path
         ).select_related('module').order_by('order_index')
 
+        # Find all modules the user has already completed anywhere across the system
+        completed_module_ids = set(
+            UserProgress.objects.filter(
+                user=self.request.user,
+                status='completed'
+            ).values_list('module_id', flat=True)
+        )
+
         for cp_module in modules:
+            is_completed = cp_module.module.id in completed_module_ids
+            initial_status = 'completed' if is_completed else 'not_started'
+            initial_percent = 100 if is_completed else 0
+
             UserProgress.objects.get_or_create(
                 user=self.request.user,
                 module=cp_module.module,
                 enrollment=enrollment,
                 defaults={
-                    'status': 'not_started',
-                    'progress_percent': 0,
+                    'status': initial_status,
+                    'progress_percent': initial_percent,
                     'time_spent_seconds': 0
                 }
             )
+
+        enrollment.update_progress()
 
     @action(detail=True, methods=['get'], url_path='progress')
     def get_progress(self, request, id=None):
@@ -62,7 +79,6 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
         ).select_related('module').order_by('module__title')
 
         # Calculate statistics
-        total_modules = module_progress.count()
         completed_modules = module_progress.filter(status='completed').count()
         in_progress_modules = module_progress.filter(status='in_progress').count()
         not_started_modules = module_progress.filter(status='not_started').count()
@@ -120,33 +136,12 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='update-progress')
     def update_progress(self, request, id=None):
-        """Recalculate and update overall enrollment progress"""
         enrollment = self.get_object()
-
-        # Get all module progress
-        module_progress = UserProgress.objects.filter(enrollment=enrollment)
-        total_modules = module_progress.count()
-
-        if total_modules == 0:
-            return Response({'progress_percent': 0})
-
-        # Calculate progress based on completed modules
-        completed_modules = module_progress.filter(status='completed').count()
-        progress = (completed_modules / total_modules) * 100
-
-        # Update enrollment
-        enrollment.progress_percent = progress
-        if progress == 100:
-            enrollment.status = 'completed'
-        elif progress > 0 and enrollment.status == 'enrolled':
-            enrollment.status = 'in_progress'
-        enrollment.save()
+        ProgressService.recalculate_enrollment(enrollment)
 
         return Response({
-            'progress_percent': float(enrollment.progress_percent),
-            'status': enrollment.status,
-            'completed_modules': completed_modules,
-            'total_modules': total_modules
+            "progress_percent": float(enrollment.progress_percent),
+            "status": enrollment.status
         })
 
     @action(detail=True, methods=['post'], url_path='complete')
@@ -192,51 +187,57 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
         enrollment.save(update_fields=['status'])
         return Response({'message': 'Career path dropped successfully', 'status': 'dropped'})
 
-    @action(detail=True, methods=['post'], url_path='add-module')
-    def add_module(self, request, id=None):
-        """Add a module to the user's enrollment"""
-        enrollment = self.get_object()
-        module_id = request.data.get('module_id')
+    @action(detail=True, methods=['post'], url_path='edit-modules')
+    def edit_modules(self, request, pk=None):
+        career_path = self.get_object()
+        user = request.user
+        selected_module_ids = request.data.get('selected_modules', [])
 
-        if not module_id:
-            return Response({'error': 'module_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not user or not user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
-        try:
-            module = LearningModule.objects.get(id=module_id)
-        except LearningModule.DoesNotExist:
-            return Response({'error': 'Module not found'}, status=status.HTTP_404_NOT_FOUND)
+        enrollment = UserEnrollment.objects.filter(
+            user=user,
+            career_path=career_path
+        ).first()
 
-        # Check if module belongs to this career path
-        is_module_in_path = CareerPathModule.objects.filter(
-            career_path=enrollment.career_path,
-            module=module
-        ).exists()
+        if not enrollment:
+            return Response(
+                {'error': 'You are not enrolled in this career path'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        if not is_module_in_path:
-            return Response({
-                'error': 'This module is not part of the selected career path'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # TRUE SOURCE OF TRUTH: Query active user progress items, NOT static base tracks
+        user_progress_records = UserProgress.objects.filter(enrollment=enrollment).select_related('module')
+        selected_set = set(str(mid) for mid in selected_module_ids)
 
-        # Check if module already exists - return success but indicate it already existed
-        progress, created = UserProgress.objects.get_or_create(
-            user=request.user,
-            module=module,
-            enrollment=enrollment,
-            defaults={
-                'status': 'not_started',
-                'progress_percent': 0,
-                'time_spent_seconds': 0
-            }
-        )
+        removed_count = 0
 
-        # Return success either way, but indicate if it was newly added
+        for progress in user_progress_records:
+            module_id_str = str(progress.module.id)
+
+            # If the user UNCHECKED this learning module item, process deletion
+            if module_id_str not in selected_set:
+                # Safety guard: Never remove structural core/mandatory requirements
+                if progress.module.is_required:
+                    continue
+
+                progress.delete()
+                removed_count += 1
+
+        # Run calculation update engine to shift metrics down instantly
+        enrollment.update_progress()
+
         return Response({
-            'message': 'Module added successfully' if created else 'Module already in your learning path',
-            'module_id': str(module.id),
-            'module_title': module.title,
-            'already_exists': not created
+            'message': 'Learning path updated successfully',
+            'enrollment_id': str(enrollment.id),
+            'progress_percent': float(enrollment.progress_percent),
+            'status': enrollment.status,
+            'removed_count': removed_count
         }, status=status.HTTP_200_OK)
-
 
 class UserProgressViewSet(viewsets.ModelViewSet):
     """ViewSet for tracking module progress"""
@@ -263,11 +264,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
         module_id = request.data.get('module_id') or request.data.get('module')
         enrollment_id = request.data.get('enrollment_id') or request.data.get('enrollment')
 
-        print("=" * 60)
-        print(f"STARTING MODULE - module_id: {module_id}")
-        print(f"Specific enrollment_id provided: {enrollment_id}")
-        print("=" * 60)
-
         if not module_id:
             return Response(
                 {'error': 'module_id is required'},
@@ -276,7 +272,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
 
         try:
             module = LearningModule.objects.get(id=module_id)
-            print(f"Found module: {module.title}")
         except LearningModule.DoesNotExist:
             return Response(
                 {'error': 'Module not found'},
@@ -291,9 +286,7 @@ class UserProgressViewSet(viewsets.ModelViewSet):
             try:
                 enrollment = UserEnrollment.objects.get(id=enrollment_id, user=request.user)
                 enrollments_to_start = [enrollment]
-                print(f"Using specific enrollment: {enrollment.id}")
             except UserEnrollment.DoesNotExist:
-                print(f"Enrollment not found with id: {enrollment_id}")
                 return Response(
                     {'error': 'Enrollment not found'},
                     status=404
@@ -306,7 +299,6 @@ class UserProgressViewSet(viewsets.ModelViewSet):
                 user=request.user,
                 career_path_id__in=career_paths_with_module
             )
-            print(f"Found {enrollments_to_start.count()} enrollments that contain this module")
 
         if not enrollments_to_start:
             return Response(
@@ -341,6 +333,7 @@ class UserProgressViewSet(viewsets.ModelViewSet):
         # Create or update progress records for ALL enrollments
         created_count = 0
         updated_count = 0
+        started_enrollments = []
 
         for enrollment in enrollments_to_start:
             progress, created = UserProgress.objects.get_or_create(
@@ -356,19 +349,25 @@ class UserProgressViewSet(viewsets.ModelViewSet):
 
             if created:
                 created_count += 1
-                print(f"Created new progress record for enrollment {enrollment.id}")
 
             if progress.status == 'not_started':
                 progress.status = 'in_progress'
                 progress.save()
                 updated_count += 1
-                print(f"Updated status to in_progress for enrollment {enrollment.id}")
 
+            started_enrollments.append({
+                'enrollment_id': str(enrollment.id),
+                'career_path_title': enrollment.career_path.title
+            })
+
+        # Return the enrollment_id to use for subsequent requests
         return Response({
             'message': 'Module started',
             'module_id': str(module.id),
             'module_title': module.title,
             'enrollments_started': len(enrollments_to_start),
+            'enrollment_id': str(enrollments_to_start[0].id) if enrollments_to_start else None,
+            'enrollments': started_enrollments,
             'created_records': created_count,
             'updated_records': updated_count,
             'status': 'in_progress'
@@ -376,130 +375,60 @@ class UserProgressViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='complete')
     def complete_module(self, request):
-        """Complete a module and award XP"""
-        from django.utils import timezone
-        from django.db.models import Q
-
-        # Get data from request
-        module_id = request.data.get('module_id') or request.data.get('module')
-        enrollment_id = request.data.get('enrollment_id') or request.data.get('enrollment')
-        score = request.data.get('score')
-
-        print("=" * 50)
-        print(f"COMPLETING MODULE - module_id: {module_id}, enrollment_id: {enrollment_id}")
-        print("=" * 50)
+        module_id = request.data.get("module_id")
+        enrollment_id = request.data.get("enrollment_id")
+        score = request.data.get("score")
 
         if not module_id:
-            return Response(
-                {'error': 'module_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "module_id is required"}, status=400)
 
         try:
             module = LearningModule.objects.get(id=module_id)
-            print(f"Found module: {module.title}")
         except LearningModule.DoesNotExist:
-            return Response({'error': 'Module not found'}, status=404)
+            return Response({"error": "Module not found"}, status=404)
 
-        # Find progress records - use filter() not get() because there could be multiple
-        progress_records = None
+        progress_records = UserProgress.objects.filter(
+            user=request.user,
+            module=module,
+            enrollment_id=enrollment_id
+        )
 
-        if enrollment_id:
-            # Specific enrollment
-            progress_records = UserProgress.objects.filter(
-                user=request.user,
-                module=module,
-                enrollment_id=enrollment_id
-            )
-        else:
-            # All progress records for this module (could be multiple if in multiple paths)
-            progress_records = UserProgress.objects.filter(
-                user=request.user,
-                module=module
-            )
+        if not progress_records.exists():
+            return Response({"error": "Module not started"}, status=400)
 
-        print(f"Found {progress_records.count()} progress records for this module")
-
-        if progress_records.count() == 0:
-            # Try to create a progress record
-            # Find any enrollment for this user
-            enrollment = None
-            career_path_module = CareerPathModule.objects.filter(module=module).first()
-            if career_path_module:
-                enrollment = UserEnrollment.objects.filter(
-                    user=request.user,
-                    career_path=career_path_module.career_path
-                ).first()
-
-            if enrollment:
-                progress = UserProgress.objects.create(
-                    user=request.user,
-                    module=module,
-                    enrollment=enrollment,
-                    status='in_progress',
-                    progress_percent=0,
-                    time_spent_seconds=0
-                )
-                progress_records = UserProgress.objects.filter(id=progress.id)
-                print(f"Created new progress record: {progress.id}")
-            else:
-                return Response(
-                    {'error': 'Module not started. Please start the module first.'},
-                    status=400
-                )
-
-        # Complete each progress record
-        completed_records = []
-        total_xp_earned = 0
+        total_xp = 0
 
         for progress in progress_records:
-            if progress.status == 'completed':
-                print(f"Progress record {progress.id} already completed")
+            if progress.status == "completed":
                 continue
 
-            # Complete this record
-            progress.status = 'completed'
+            progress.status = "completed"
             progress.progress_percent = 100
             progress.completed_at = timezone.now()
-            progress.updated_at = timezone.now()
 
             if score:
                 try:
-                    progress.score = Decimal(str(score))
+                    progress.score = float(score)
                 except:
                     pass
 
             progress.save()
+            total_xp = module.xp_points  # only once
 
-            # Award XP (once per module, but for the first completion)
-            if total_xp_earned == 0:
-                total_xp_earned = module.xp_points
+        # update XP
+        request.user.total_xp += total_xp
+        request.user.save()
 
-            # Update enrollment progress
-            if progress.enrollment:
-                progress.enrollment.update_progress()
-                print(
-                    f"Updated enrollment {progress.enrollment.id} progress to {progress.enrollment.progress_percent}%")
-
-            completed_records.append(progress)
-            print(f"Completed progress record {progress.id} for module {module.title}")
-
-        # Award XP to user (only once even if completed in multiple paths)
-        if total_xp_earned > 0:
-            user = request.user
-            user.total_xp += total_xp_earned
-            user.save()
-            print(f"Awarded {total_xp_earned} XP to user {user.email}")
+        # recalc enrollment
+        enrollment = progress_records.first().enrollment
+        ProgressService.recalculate_enrollment(enrollment)
 
         return Response({
-            'message': 'Module completed!',
-            'module_id': str(module.id),
-            'module_title': module.title,
-            'xp_earned': total_xp_earned,
-            'total_xp': request.user.total_xp,
-            'completed_enrollments': len(completed_records),
-            'status': 'completed'
-        }, status=200)
+            "message": "Module completed",
+            "xp_earned": total_xp,
+            "total_xp": request.user.total_xp,
+            "enrollment_progress": float(enrollment.progress_percent)
+        })
 
     @action(detail=False, methods=['post'], url_path='update-time')
     def update_time(self, request):
@@ -594,157 +523,10 @@ class UserProgressViewSet(viewsets.ModelViewSet):
 
         # Update enrollment progress if enrollment exists
         if enrollment_id and progress.status == 'completed':
-            from .services import ProgressService
             ProgressService.update_enrollment_progress(request.user, enrollment_id)
 
         serializer = self.get_serializer(progress)
         return Response(serializer.data)
-
-    @action(detail=False, methods=['post'], url_path='complete')
-    def complete_module(self, request):
-        """Complete a module and award XP - updates ALL enrollments where this module exists"""
-        from django.utils import timezone
-        from django.db.models import Q
-
-        # Get data from request
-        module_id = request.data.get('module_id') or request.data.get('module')
-        enrollment_id = request.data.get('enrollment_id') or request.data.get('enrollment')
-        score = request.data.get('score')
-
-        print("=" * 60)
-        print(f"COMPLETING MODULE - module_id: {module_id}")
-        print(f"Specific enrollment_id provided: {enrollment_id}")
-        print("=" * 60)
-
-        if not module_id:
-            return Response(
-                {'error': 'module_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            module = LearningModule.objects.get(id=module_id)
-            print(f"Found module: {module.title}")
-        except LearningModule.DoesNotExist:
-            return Response({'error': 'Module not found'}, status=404)
-
-        # Find ALL progress records for this module (could be in multiple career paths)
-        if enrollment_id:
-            # If specific enrollment provided, only update that one
-            progress_records = UserProgress.objects.filter(
-                user=request.user,
-                module=module,
-                enrollment_id=enrollment_id
-            )
-            print(f"Found {progress_records.count()} progress record(s) for specific enrollment")
-        else:
-            # Update ALL progress records for this module across all enrollments
-            progress_records = UserProgress.objects.filter(
-                user=request.user,
-                module=module
-            )
-            print(f"Found {progress_records.count()} total progress record(s) for this module across all career paths")
-
-        if progress_records.count() == 0:
-            # No progress records found - try to create one
-            print("No progress records found, attempting to create...")
-
-            # Find all enrollments that include this module
-            career_paths_with_module = CareerPathModule.objects.filter(module=module).values_list('career_path_id',
-                                                                                                  flat=True)
-            enrollments = UserEnrollment.objects.filter(
-                user=request.user,
-                career_path_id__in=career_paths_with_module
-            )
-
-            print(f"Found {enrollments.count()} enrollments that contain this module")
-
-            for enrollment in enrollments:
-                progress = UserProgress.objects.create(
-                    user=request.user,
-                    module=module,
-                    enrollment=enrollment,
-                    status='in_progress',
-                    progress_percent=0,
-                    time_spent_seconds=0
-                )
-                print(f"Created progress record for enrollment {enrollment.id}")
-
-            # Refetch progress records
-            if enrollment_id:
-                progress_records = UserProgress.objects.filter(
-                    user=request.user,
-                    module=module,
-                    enrollment_id=enrollment_id
-                )
-            else:
-                progress_records = UserProgress.objects.filter(
-                    user=request.user,
-                    module=module
-                )
-
-        if progress_records.count() == 0:
-            return Response(
-                {'error': 'No enrollment found. Please enroll in a career path first.'},
-                status=400
-            )
-
-        # Complete ALL progress records
-        completed_count = 0
-        already_completed_count = 0
-        total_xp_earned = 0
-
-        for progress in progress_records:
-            if progress.status == 'completed':
-                print(f"Progress record {progress.id} (enrollment: {progress.enrollment_id}) already completed")
-                already_completed_count += 1
-                continue
-
-            # Complete this record
-            progress.status = 'completed'
-            progress.progress_percent = 100
-            progress.completed_at = timezone.now()
-            progress.updated_at = timezone.now()
-
-            if score:
-                try:
-                    progress.score = Decimal(str(score))
-                except:
-                    pass
-
-            progress.save()
-
-            # Award XP (only once per module, for the first completion)
-            if total_xp_earned == 0:
-                total_xp_earned = module.xp_points
-
-            # Update enrollment progress for this specific enrollment
-            if progress.enrollment:
-                progress.enrollment.update_progress()
-                print(
-                    f"✅ Updated enrollment {progress.enrollment.id} progress to {progress.enrollment.progress_percent}%")
-
-            completed_count += 1
-            print(f"✅ Completed progress record {progress.id} for enrollment {progress.enrollment_id}")
-
-        # Award XP to user (only once even if completed in multiple paths)
-        if total_xp_earned > 0:
-            user = request.user
-            user.total_xp += total_xp_earned
-            user.save()
-            print(f"🏆 Awarded {total_xp_earned} XP to user {user.email} (Total: {user.total_xp})")
-
-        return Response({
-            'message': 'Module completed!',
-            'module_id': str(module.id),
-            'module_title': module.title,
-            'xp_earned': total_xp_earned,
-            'total_xp': request.user.total_xp,
-            'completed_records': completed_count,
-            'already_completed': already_completed_count,
-            'total_records': progress_records.count(),
-            'status': 'completed'
-        }, status=200)
 
     @action(detail=True, methods=['get'], url_path='check-prerequisites')
     def check_prerequisites(self, request, id=None):
@@ -839,7 +621,6 @@ class DashboardView(APIView):
                 'completions': completions
             })
 
-        print(f"Weekly activity calculated: {weekly_activity}")
 
         # Calculate total time spent
         total_time_seconds = UserProgress.objects.filter(user=user).aggregate(
@@ -898,8 +679,6 @@ class DashboardView(APIView):
 
     def _calculate_streak(self, user):
         """Calculate current learning streak based on completion dates"""
-        from datetime import timedelta
-
         # Get all completion dates
         completion_dates = UserProgress.objects.filter(
             user=user,
@@ -1032,7 +811,6 @@ class ProgressAnalyticsView(APIView):
         user = request.user
 
         # Skill development over time (monthly)
-        from django.db.models.functions import TruncMonth
         monthly_progress = UserProgress.objects.filter(
             user=user, status='completed'
         ).annotate(month=TruncMonth('created_at')).values('month').annotate(
@@ -1085,7 +863,6 @@ class ProgressAnalyticsView(APIView):
     def _calculate_skill_development_rate(self, user):
         """Calculate skill development rate over time"""
         # Get skill additions over last 6 months
-        from datetime import timedelta
         six_months_ago = timezone.now() - timedelta(days=180)
         monthly_skill_growth = []
 

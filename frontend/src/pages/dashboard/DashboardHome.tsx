@@ -144,10 +144,10 @@ const DashboardHome: React.FC = () => {
             <Link to="/dashboard/learning" className="inline-block mt-4 text-blue-600 hover:underline">Start Learning →</Link>
           </div>
           <div className="bg-white rounded-lg shadow p-6 text-center">
-            <div className="text-4xl mb-3">🤖</div>
-            <h3 className="text-lg font-semibold mb-2">AI Career Assistant</h3>
-            <p className="text-gray-600">Get personalized career advice from our AI assistant.</p>
-            <Link to="/dashboard/chat" className="inline-block mt-4 text-blue-600 hover:underline">Chat Now →</Link>
+            <div className="text-4xl mb-3">📝</div>
+            <h3 className="text-lg font-semibold mb-2">Quizzes</h3>
+            <p className="text-gray-600">Get career recommendations after taking a quiz.</p>
+            <Link to="/dashboard/quizzes" className="inline-block mt-4 text-blue-600 hover:underline">Take a quiz →</Link>
           </div>
         </div>
       </div>

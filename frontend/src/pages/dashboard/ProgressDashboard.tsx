@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { progressAPI } from '../../services/api';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {showToast} from "../../components/Toast.tsx";
 
 interface Enrollment {
   id: string;
@@ -27,6 +28,7 @@ interface Module {
   is_required: boolean;
   is_selected: boolean;
   is_completed: boolean;
+  is_completed_globally?: boolean;
   progress_percent: number;
   order_index: number;
 }
@@ -87,23 +89,41 @@ const ProgressDashboard: React.FC = () => {
     }
   };
 
-  const fetchPathModules = async (careerPathId: string, enrollmentId: string) => {
+  const fetchPathModules = async (careerPathId: string) => {
     try {
       const token = localStorage.getItem('access_token');
-      const response = await axios.get(`/api/learning/career-paths/${careerPathId}/modules/?enrollment_id=${enrollmentId}`, {
+      const response = await axios.get(`/api/learning/career-paths/${careerPathId}/selected-modules/`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setPathModules(response.data);
 
+      const modulesData = response.data.selected_modules || [];
+
+      const normalizedModules = modulesData.map((m: any) => ({
+        id: m.id,
+        title: m.title,
+        description: m.description || 'Custom learning module',
+        content_type: m.content_type || 'interactive',
+        duration_minutes: m.duration_minutes || 0,
+        difficulty: m.difficulty || 'intermediate',
+        xp_points: m.xp_points || 10,
+        is_required: m.is_required || false,
+        is_selected: true,
+        is_completed: m.is_completed || m.status === 'completed',
+        progress_percent: m.progress_percent || 0,
+        order_index: m.order_index || 999
+      }));
+
+      setPathModules(normalizedModules);
+
+      // FIX: Add ALL active modules into the initial selected checkbox set
       const selected = new Set<string>();
-      response.data.forEach((module: Module) => {
-        if (module.is_selected && !module.is_completed) {
-          selected.add(module.id);
-        }
+      normalizedModules.forEach((module: Module) => {
+        selected.add(module.id);
       });
       setSelectedModules(selected);
     } catch (err) {
       console.error('Failed to fetch modules:', err);
+      setPathModules([]);
     }
   };
 
@@ -130,7 +150,7 @@ const ProgressDashboard: React.FC = () => {
 
   const handlePathClick = async (enrollment: Enrollment) => {
     setSelectedPath(enrollment);
-    await fetchPathModules(enrollment.career_path, enrollment.id);
+    await fetchPathModules(enrollment.career_path);
     setEditingModules(false);
   };
 
@@ -149,10 +169,12 @@ const ProgressDashboard: React.FC = () => {
         setSelectedPath(null);
         setPathModules([]);
       }
-      alert('Career path dropped successfully. You can re-enroll anytime.');
+      showToast('Career path dropped successfully. You can re-enroll anytime.', 'success');
     } catch (err) {
       console.error('Failed to drop path:', err);
-      alert('Failed to drop path. Please try again.');
+      showToast('Failed to drop path. Please try again.', 'error');
+    } finally {
+        await refreshAll();
     }
   };
 
@@ -181,60 +203,80 @@ const ProgressDashboard: React.FC = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       setEditingModules(false);
-      await fetchPathModules(selectedPath.career_path, selectedPath.id);
+      await fetchPathModules(selectedPath.career_path);
       await fetchDashboardData();
-      alert('Learning path updated successfully!');
+      showToast('Learning path updated successfully!', 'success');
     } catch (err) {
       console.error('Failed to save modules:', err);
-      alert('Failed to save changes. Please try again.');
+      showToast('Failed to save changes. Please try again.', 'error');
     } finally {
       setSavingModules(false);
+      await refreshAll();
     }
   };
 
   const addModuleToPath = async (moduleId: string) => {
-    if (!selectedPath) return;
+  if (!selectedPath) return;
 
-    setAddingModule(true);
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await axios.post(`/api/learning/career-paths/${selectedPath.career_path}/add-module/`, {
+  setAddingModule(true);
+  try {
+    const token = localStorage.getItem('access_token');
+    const response = await axios.post(
+      `/api/learning/career-paths/${selectedPath.career_path}/add-module/`,
+      {
         module_id: moduleId,
         enrollment_id: selectedPath.id
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
 
-      await fetchPathModules(selectedPath.career_path, selectedPath.id);
-      await fetchDashboardData();
+    // Refresh modules list
+    await fetchPathModules(selectedPath.career_path);
+    await fetchDashboardData();
 
-      alert(response.data.message);
-      setShowAddModal(false);
-      setSearchTerm('');
-      setFilterType('');
-      setFilterDifficulty('');
-    } catch (err: any) {
-      console.error('Failed to add module:', err);
-      alert(err.response?.data?.error || 'Failed to add module. Please try again.');
-    } finally {
-      setAddingModule(false);
+    // Also refresh available modules if modal is open
+    if (showAddModal) {
+      await fetchAvailableModules(selectedPath.career_path, selectedPath.id);
     }
-  };
+
+    showToast(response.data.message, 'success');
+    setShowAddModal(false);
+  } catch (err: any) {
+    console.error('Failed to add module:', err);
+    showToast(err.response?.data?.error || 'Failed to add module', 'error');
+  } finally {
+    setAddingModule(false);
+    await refreshAll();
+  }
+};
 
   const startModule = async (moduleId: string) => {
     try {
-      const token = localStorage.getItem('access_token');
-      await axios.post('/api/progress/progress/start/', {
-        module_id: moduleId,
-        enrollment_id: selectedPath?.id
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      navigate(`/dashboard/learning/${moduleId}`);
-    } catch (err) {
-      console.error('Failed to start module:', err);
+        const token = localStorage.getItem('access_token');
+        const response = await axios.post('/api/progress/progress/start/', {
+            module_id: moduleId,
+            enrollment_id: selectedPath?.id
+        }, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+
+        // Store the enrollment_id if returned
+        const enrollmentId = response.data.enrollment_id || selectedPath?.id;
+
+        // Navigate with both module and enrollment info
+        navigate(`/dashboard/learning/${moduleId}?enrollment_id=${enrollmentId}`);
+
+        // Also store in sessionStorage for persistence
+        sessionStorage.setItem('current_enrollment_id', enrollmentId);
+        sessionStorage.setItem('current_module_id', moduleId);
+
+    } catch (err: any) {
+        console.error('Failed to start module:', err);
+        showToast(err.response?.data?.error || 'Failed to start module', 'error');
+    } finally {
+      await refreshAll();
     }
-  };
+};
 
   const openAddModuleModal = () => {
     if (selectedPath) {
@@ -242,6 +284,13 @@ const ProgressDashboard: React.FC = () => {
       setShowAddModal(true);
     }
   };
+
+  const refreshAll = async () => {
+  await fetchDashboardData();
+  if (selectedPath) {
+    await fetchPathModules(selectedPath.career_path);
+  }
+};
 
   if (loading) {
     return (
@@ -419,12 +468,13 @@ const ProgressDashboard: React.FC = () => {
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        {editingModules && !module.is_completed && (
+                        {editingModules && (
                           <input
                             type="checkbox"
                             checked={selectedModules.has(module.id)}
                             onChange={() => toggleModuleSelection(module.id)}
                             className="w-4 h-4 mr-2"
+                            // Disable if it's required (or add module.is_completed if you want to block removing finished ones)
                             disabled={module.is_required}
                           />
                         )}
@@ -439,9 +489,6 @@ const ProgressDashboard: React.FC = () => {
                       <p className="text-sm text-gray-600 mt-1">{module.description}</p>
                       <div className="flex items-center gap-3 mt-2">
                         <span className="text-xs text-gray-500">⭐ {module.xp_points} XP</span>
-                        {module.is_completed && (
-                          <span className="text-xs text-green-600">✓ Completed</span>
-                        )}
                         {module.progress_percent > 0 && module.progress_percent < 100 && (
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500">{module.progress_percent}%</span>
@@ -452,16 +499,15 @@ const ProgressDashboard: React.FC = () => {
                         )}
                       </div>
                     </div>
-                    {!editingModules && !module.is_completed && (
+                    {(module.is_completed || module.is_completed_globally) ? (
+                      <span className="ml-4 text-green-600 text-sm">✓ Completed</span>
+                    ) : (
                       <button
                         onClick={() => startModule(module.id)}
-                        className="ml-4 bg-blue-600 text-white px-4 py-1 rounded text-sm hover:bg-blue-700"
+                        className="ml-4 bg-blue-600 text-white px-4 py-1 rounded text-sm"
                       >
                         {module.progress_percent > 0 ? 'Continue' : 'Start'}
                       </button>
-                    )}
-                    {!editingModules && module.is_completed && (
-                      <span className="ml-4 text-green-600 text-sm">✓ Completed</span>
                     )}
                   </div>
                 </div>
@@ -491,7 +537,8 @@ const ProgressDashboard: React.FC = () => {
                   placeholder="Search modules..."
                   value={searchTerm}
                   onChange={(e) => {
-                    setSearchTerm(e.target.value);
+                    const val = e.target.value;
+                    setSearchTerm(val);
                     if (selectedPath) {
                       fetchAvailableModules(selectedPath.career_path, selectedPath.id);
                     }

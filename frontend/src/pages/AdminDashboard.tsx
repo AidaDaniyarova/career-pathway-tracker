@@ -1,15 +1,16 @@
 import React from 'react';
 import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import QuizManagement from "./admin/QuizManagement.tsx";
 
 // Lazy load components for better performance
 const Overview = React.lazy(() => import('./admin/Overview'));
 const UsersList = React.lazy(() => import('./admin/UsersList'));
 const CareerPathsList = React.lazy(() => import('./admin/CareerPathsList'));
 const ModulesList = React.lazy(() => import('./admin/ModulesList'));
-const QuizzesList = React.lazy(() => import('./admin/QuizzesList'));
 const SkillsList = React.lazy(() => import('./admin/SkillsList'));
 const CVsList = React.lazy(() => import('./admin/CVsList'));
+const ScrapeCourses = React.lazy(() => import('./admin/ScrapeCourses'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -33,6 +34,7 @@ const AdminDashboard: React.FC = () => {
     { path: '/admin/users', label: '👥 Users' },
     { path: '/admin/career-paths', label: '🎯 Career Paths' },
     { path: '/admin/modules', label: '📚 Learning Modules' },
+    { path: '/admin/scrape-courses', label: '🌐 Scrape Courses' },
     { path: '/admin/quizzes', label: '📝 Quizzes' },
     { path: '/admin/skills', label: '🔧 Skills' },
     { path: '/admin/cvs', label: '📄 CVs' },
@@ -93,7 +95,8 @@ const AdminDashboard: React.FC = () => {
               <Route path="users" element={<UsersList />} />
               <Route path="career-paths" element={<CareerPathsList />} />
               <Route path="modules" element={<ModulesList />} />
-              <Route path="quizzes" element={<QuizzesList />} />
+              <Route path="scrape-courses" element={<ScrapeCourses />} />
+              <Route path="quizzes" element={<QuizManagement />} />
               <Route path="skills" element={<SkillsList />} />
               <Route path="cvs" element={<CVsList />} />
             </Routes>

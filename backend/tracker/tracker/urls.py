@@ -1,8 +1,7 @@
 from django.contrib import admin
-from django.urls import path, include, reverse
+from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from django.views.generic import TemplateView
 from django.shortcuts import redirect
 
 
@@ -18,9 +17,10 @@ urlpatterns = [
     path('api/admin/', include('admin_dashboard.urls')),
     path('api/users/', include('users.urls')),
     path('api/learning/', include('learning.urls')),
-    path('api/quizzes/', include('assessment.urls')),
+    path('api/quizzes/', include('quizzes.urls')),
     path('api/progress/', include('progress.urls')),
     path('api/ai/', include('ai.urls')),
+    path('api/scraper/', include('course_scraper.urls')),
     path('api/cv/', include('cv.urls')),
     path('api/skills/', include('skills.urls')),
 ]

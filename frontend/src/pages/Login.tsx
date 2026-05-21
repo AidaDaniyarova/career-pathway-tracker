@@ -82,6 +82,12 @@ const Login: React.FC = () => {
             Create an account
           </a>
         </p>
+
+        <p className="text-center text-gray-600 mt-4">
+          <a href="/dashboard" className="text-blue-600 hover:underline">
+            ← Back to dashboard
+          </a>
+        </p>
       </div>
     </div>
   );

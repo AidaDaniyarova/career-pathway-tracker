@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
+import {showToast} from "../../components/Toast.tsx";
 
 interface Module {
   id: string;
@@ -18,6 +19,7 @@ interface Module {
 }
 
 interface RequiredSkill {
+  id: string;
   skill: {
     id: string;
     name: string;
@@ -30,11 +32,16 @@ interface CareerPathDetail {
   title: string;
   description: string;
   industry: string;
+
   required_skills: RequiredSkill[];
+
   modules: Module[];
+  available_modules: Module[];
+
   avg_salary_min: number;
   avg_salary_max: number;
   growth_outlook: string;
+
   is_enrolled: boolean;
   enrollment_status: string;
   enrollment_progress: number;
@@ -101,7 +108,7 @@ const CareerPathDetail: React.FC = () => {
       fetchPathDetail();
     } catch (err) {
       console.error('Failed to enroll:', err);
-      alert('Failed to enroll. Please try again.');
+      showToast('Failed to enroll. Please try again.', 'error');
     }
   };
 
@@ -133,7 +140,7 @@ const CareerPathDetail: React.FC = () => {
       fetchPathDetail();
     } catch (err) {
       console.error('Failed to save module selection:', err);
-      alert('Failed to save changes. Please try again.');
+      showToast('Failed to save changes. Please try again.', 'error');
     } finally {
       setSaving(false);
     }
@@ -146,9 +153,6 @@ const CareerPathDetail: React.FC = () => {
   }
 
   try {
-    console.log('Starting module:', moduleId);
-    console.log('With enrollment_id:', path?.enrollment_id);
-
     const requestBody: any = {
       module_id: moduleId
     };
@@ -164,16 +168,14 @@ const CareerPathDetail: React.FC = () => {
       }
     });
 
-    console.log('Start response:', response.data);
-
     navigate(`/dashboard/learning/${moduleId}`, {
       state: {
         enrollment_id: response.data.enrollment_id || path?.enrollment_id
       }
     });
   } catch (err: any) {
-    console.error('Failed to start module:', err);
-    alert(err.response?.data?.error || 'Failed to start module');
+      console.error('Failed to start module:', err);
+      showToast('Failed to start module', 'error');
   }
 };
 
@@ -451,7 +453,7 @@ const CareerPathDetail: React.FC = () => {
       </div>
 
       <div className="flex justify-between mt-6">
-        <button onClick={() => navigate('/career-paths')} className="text-gray-600 hover:text-gray-800">
+        <button onClick={() => navigate('/dashboard/career-paths')} className="text-gray-600 hover:text-gray-800">
           ← Back to Career Paths
         </button>
         {isAuthenticated && path.is_enrolled && (

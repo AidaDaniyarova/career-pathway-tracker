@@ -31,29 +31,36 @@ class UserEnrollment(models.Model):
         return self.status == 'completed'
 
     def update_progress(self):
-        """Update progress based on completed modules in this enrollment"""
-        # Get all modules in this career path
-        total_modules = CareerPathModule.objects.filter(career_path=self.career_path).count()
+        """
+        DYNAMIC SOURCE OF TRUTH:
+        The total scope is defined by all modules the user currently has
+        assigned to this specific enrollment (Base track modules + custom added modules).
+        """
+        # Count all modules currently active in this user's enrollment
+        total_modules = UserProgress.objects.filter(enrollment=self).count()
 
-        # Get completed modules for this specific enrollment
+        if total_modules == 0:
+            self.progress_percent = 0
+            self.status = "enrolled"
+            self.save(update_fields=["progress_percent", "status"])
+            return
+
+        # Count how many of THOSE specific modules are marked 'completed'
         completed_modules = UserProgress.objects.filter(
-            user=self.user,
             enrollment=self,
             status='completed'
         ).count()
 
-        if total_modules > 0:
-            self.progress_percent = (completed_modules / total_modules) * 100
+        self.progress_percent = round((completed_modules / total_modules) * 100, 2)
+
+        if self.progress_percent >= 100:
+            self.status = "completed"
+        elif self.progress_percent > 0:
+            self.status = "in_progress"
         else:
-            self.progress_percent = 0
+            self.status = "enrolled"
 
-        if self.progress_percent >= 100 and self.status != 'completed':
-            self.status = 'completed'
-        elif self.progress_percent > 0 and self.status == 'enrolled':
-            self.status = 'in_progress'
-
-        self.save(update_fields=['progress_percent', 'status'])
-        print(f"Enrollment {self.id} progress updated to {self.progress_percent}%")
+        self.save(update_fields=["progress_percent", "status"])
 
 
 class UserProgress(models.Model):

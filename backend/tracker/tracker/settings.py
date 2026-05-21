@@ -55,8 +55,8 @@ INSTALLED_APPS = [
     'users',
     'skills',
     'learning',
-    'assessment',
     'progress',
+    'quizzes',
     'api',
     'ai',
     'cv',
@@ -242,8 +242,14 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # AI Settings
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+# OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 HUGGINGFACE_API_KEY = os.getenv('HUGGINGFACE_API_KEY')
+HUGGINGFACE_MODELS = {
+    'job_matcher': 'cross-encoder/ms-marco-MiniLM-L-6-v2',  # For job-CV matching
+    'skill_extractor': 'dslim/bert-base-NER',  # For extracting skills
+    'summarizer': 'facebook/bart-large-cnn',  # For summarizing job descriptions
+    'question_generator': 'mrm8488/t5-base-finetuned-question-generation',  # For interview questions
+}
 APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN')
 
 # Default primary key field type

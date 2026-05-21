@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
+import { showToast } from "../../components/Toast";
 
 interface ModuleDetail {
   id: string;
@@ -34,11 +35,21 @@ const LearningModuleDetail: React.FC = () => {
   const [enrollmentId, setEnrollmentId] = useState<string | null>(null);
   const token = localStorage.getItem('access_token');
 
+  // Track if user has returned from external site
+  const [returnedFromExternal, setReturnedFromExternal] = useState(false);
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const encId = params.get('enrollment_id') || location.state?.enrollment_id;
     if (encId) {
       setEnrollmentId(encId);
+    }
+
+    // Check if returning from external site
+    const justReturned = sessionStorage.getItem('returned_from_external');
+    if (justReturned === 'true') {
+      setReturnedFromExternal(true);
+      sessionStorage.removeItem('returned_from_external');
     }
   }, [location]);
 
@@ -50,6 +61,13 @@ const LearningModuleDetail: React.FC = () => {
       setLoading(false);
     }
   }, [id]);
+
+  // Auto-mark as complete when returning from external site
+  useEffect(() => {
+    if (returnedFromExternal && module && module.user_status !== 'completed') {
+      handleCompleteFromExternal();
+    }
+  }, [returnedFromExternal, module]);
 
   const fetchModule = async () => {
     try {
@@ -75,7 +93,7 @@ const LearningModuleDetail: React.FC = () => {
     }
 
     if (!token) {
-      alert('Please login again');
+      showToast('Please login again', 'warning');
       navigate('/login');
       return;
     }
@@ -87,70 +105,107 @@ const LearningModuleDetail: React.FC = () => {
         requestBody.enrollment_id = enrollmentId;
       }
 
-      console.log('Starting module with data:', requestBody);
-      console.log('Using token:', token.substring(0, 20) + '...');
-
-      const response = await axios.post('/api/progress/progress/start/',
-        requestBody,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
+      await axios.post('/api/progress/progress/start/', requestBody, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
-      );
+      });
 
-      console.log('Start module response:', response.data);
       await fetchModule();
-      alert('Module started! Good luck with your learning!');
+
+      // If there's an external URL, redirect to it
+      if (module?.content_url) {
+        // Store a flag that we're going to external site
+        sessionStorage.setItem('returning_from_external', 'true');
+        // Open external URL in new tab
+        window.open(module.content_url, '_blank');
+        showToast('Module started! Complete the course on the external site, then click "Mark as Complete"', 'success');
+      } else {
+        showToast('Module started! Good luck with your learning!', 'success');
+      }
     } catch (err: any) {
-      console.error('Failed to start module:', err);
-      const errorMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to start module';
-      alert(errorMsg);
+      showToast(err.response?.data?.error || 'Failed to start module', 'error');
     } finally {
       setStarting(false);
     }
   };
 
   const handleComplete = async () => {
-  if (!isAuthenticated || !token) {
-    navigate('/login');
-    return;
-  }
-
-  setCompleting(true);
-  try {
-    const finalEnrollmentId = enrollmentId || (module as any)?.enrollment_id;
-
-    const requestBody: any = { module_id: id };
-    if (finalEnrollmentId) {
-      requestBody.enrollment_id = finalEnrollmentId;
+    if (!isAuthenticated || !token) {
+      navigate('/login');
+      return;
     }
 
-    console.log('Completing module with enrollment_id:', finalEnrollmentId);
+    setCompleting(true);
+    try {
+      const finalEnrollmentId = enrollmentId || (module as any)?.enrollment_id;
 
-    const response = await axios({
-      method: 'post',
-      url: '/api/progress/progress/complete/',
-      data: requestBody,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+      const requestBody: any = { module_id: id };
+      if (finalEnrollmentId) {
+        requestBody.enrollment_id = finalEnrollmentId;
       }
-    });
 
-    console.log('Complete response:', response.data);
-    alert(`✅ Module completed! You earned ${response.data.xp_earned} XP!`);
+      const response = await axios({
+        method: 'post',
+        url: '/api/progress/progress/complete/',
+        data: requestBody,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
 
-    sessionStorage.setItem('shouldRefreshDashboard', 'true');
-    navigate('/dashboard/progress');
-  } catch (err: any) {
-    console.error('Failed to complete module:', err);
-    alert(err.response?.data?.error || 'Failed to complete module');
-  } finally {
-    setCompleting(false);
-  }
-};
+      showToast(`Module completed! You earned ${response.data.xp_earned} XP!`, 'success');
+
+      sessionStorage.setItem('shouldRefreshDashboard', 'true');
+      navigate('/dashboard/progress');
+    } catch (err: any) {
+      showToast(err.response?.data?.error || 'Failed to complete module', 'error');
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const handleCompleteFromExternal = async () => {
+    if (!isAuthenticated || !token) return;
+
+    try {
+      const finalEnrollmentId = enrollmentId || (module as any)?.enrollment_id;
+
+      const requestBody: any = { module_id: id };
+      if (finalEnrollmentId) {
+        requestBody.enrollment_id = finalEnrollmentId;
+      }
+
+      const response = await axios({
+        method: 'post',
+        url: '/api/progress/progress/complete/',
+        data: requestBody,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      showToast(`Welcome back! You earned ${response.data.xp_earned} XP for completing this module!`, 'success');
+
+      // Refresh module data
+      await fetchModule();
+
+      // Refresh dashboard data
+      sessionStorage.setItem('shouldRefreshDashboard', 'true');
+
+    } catch (err: any) {
+      console.error('Failed to auto-complete module:', err);
+    }
+  };
+
+  const openExternalContent = () => {
+    if (module?.content_url) {
+      window.open(module.content_url, '_blank');
+    }
+  };
 
   const formatTime = (minutes: number) => {
     if (!minutes) return 'N/A';
@@ -191,6 +246,7 @@ const LearningModuleDetail: React.FC = () => {
 
   const userProgress = module.user_progress_percent !== undefined ? module.user_progress_percent : module.progress_percent;
   const userStatus = module.user_status || module.status;
+  const isExternalCourse = module.content_type === 'external' || (module.content_url && module.content_url.startsWith('http'));
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -198,12 +254,21 @@ const LearningModuleDetail: React.FC = () => {
       <div className="bg-white rounded-lg shadow p-6 mb-6">
         <h1 className="text-2xl font-bold mb-2">{module.title}</h1>
         <div className="flex gap-3 text-sm text-gray-500 mb-4">
-          <span>📹 {module.content_type}</span>
+          <span>{module.content_type === 'external' ? '🔗' : '📹'} {module.content_type || 'Course'}</span>
           <span>⏱️ {formatTime(module.duration_minutes)}</span>
           <span>📊 {module.difficulty}</span>
           <span>⭐ {module.xp_points} XP</span>
         </div>
         <p className="text-gray-600">{module.description}</p>
+
+        {isExternalCourse && module.content_url && (
+          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+            <p className="text-sm text-blue-700 flex items-center gap-2">
+              <span>🔗</span>
+              This course is hosted on an external platform. Click "Start Module" to open it in a new tab.
+            </p>
+          </div>
+        )}
 
         {!isAuthenticated && (
           <div className="mt-4 p-3 bg-blue-50 rounded-lg">
@@ -228,10 +293,29 @@ const LearningModuleDetail: React.FC = () => {
         </div>
       )}
 
-      {/* Content */}
-      <div className="bg-white rounded-lg shadow p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4">Content</h2>
-        {module.content_type === 'video' && module.content_url && (
+      {/* Course Link Section for External Courses */}
+      {isExternalCourse && module.content_url && (
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Course Location</h2>
+          <div className="text-center py-4">
+            <p className="text-gray-600 mb-4">
+              This course is hosted on an external learning platform.
+            </p>
+            <button
+              onClick={openExternalContent}
+              className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 inline-flex items-center gap-2"
+            >
+              <span>🔗</span>
+              Open Course on External Site
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Content Preview (for non-external courses) */}
+      {!isExternalCourse && module.content_type === 'video' && module.content_url && (
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Content Preview</h2>
           <div className="aspect-video bg-gray-100 rounded-lg">
             <iframe
               src={module.content_url}
@@ -240,13 +324,21 @@ const LearningModuleDetail: React.FC = () => {
               allowFullScreen
             />
           </div>
-        )}
-        {module.content_type === 'article' && (
+        </div>
+      )}
+
+      {!isExternalCourse && module.content_type === 'article' && (
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Content</h2>
           <div className="prose max-w-none">
             <div dangerouslySetInnerHTML={{ __html: module.description }} />
           </div>
-        )}
-        {module.content_type === 'quiz' && (
+        </div>
+      )}
+
+      {!isExternalCourse && module.content_type === 'quiz' && (
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Assessment</h2>
           <div className="text-center py-8">
             <p className="text-gray-600 mb-4">This module contains a quiz to test your knowledge.</p>
             {isAuthenticated ? (
@@ -262,8 +354,8 @@ const LearningModuleDetail: React.FC = () => {
               </button>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Progress Section - Only for authenticated users */}
       {isAuthenticated && (
@@ -303,6 +395,14 @@ const LearningModuleDetail: React.FC = () => {
             <div className="mt-4 p-3 bg-green-50 rounded-lg">
               <p className="text-green-700 text-sm">
                 🎉 You've completed this module and earned {module.xp_points} XP!
+              </p>
+            </div>
+          )}
+
+          {userStatus === 'in_progress' && isExternalCourse && module.content_url && (
+            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+              <p className="text-blue-700 text-sm">
+                💡 After completing the course on the external site, click "Mark as Complete" to earn your XP points.
               </p>
             </div>
           )}

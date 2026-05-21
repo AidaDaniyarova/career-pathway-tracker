@@ -248,7 +248,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             )
 
         module_id = request.data.get('module_id')
-
         if not module_id:
             return Response(
                 {'error': 'module_id is required'},
@@ -274,40 +273,53 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        if not CareerPathModule.objects.filter(
-                career_path=career_path,
-                module=module
-        ).exists():
-            return Response(
-                {'error': 'Module does not belong to this career path'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Check if the user completed this module globally in another track
+        has_completed_globally = UserProgress.objects.filter(
+            user=user,
+            module=module,
+            status='completed'
+        ).exists()
 
+        initial_status = 'completed' if has_completed_globally else 'in_progress'
+        initial_percent = 100 if has_completed_globally else 0
+
+        # Create or fetch progress record tied to this track's enrollment context
         progress, created = UserProgress.objects.get_or_create(
             user=user,
             module=module,
             enrollment=enrollment,
             defaults={
-                'status': 'not_started',
-                'progress_percent': 0,
+                'status': initial_status,
+                'progress_percent': initial_percent,
                 'time_spent_seconds': 0
             }
         )
 
+        # If it already existed but wasn't completed, move it to in_progress right now
+        if not created and progress.status == 'not_started':
+            progress.status = 'in_progress'
+            progress.save(update_fields=['status'])
+
+        # Explicitly run our updated calculation engine
         enrollment.update_progress()
 
         if created:
             return Response({
-                'message': 'Module added successfully',
+                'message': f"Module added successfully and set to '{initial_status}'",
                 'module_id': str(module.id),
-                'module_title': module.title
-            })
+                'module_title': module.title,
+                'enrollment_progress': float(enrollment.progress_percent),
+                'enrollment_status': enrollment.status
+            }, status=status.HTTP_201_CREATED)
 
         return Response({
             'message': 'Module already exists in your learning path',
             'module_id': str(module.id),
-            'module_title': module.title
-        })
+            'module_title': module.title,
+            'enrollment_progress': float(enrollment.progress_percent),
+            'enrollment_status': enrollment.status
+            # Remove validation constraint check completely so any module is fair game!
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='edit-modules')
     def edit_modules(self, request, pk=None):
@@ -332,50 +344,25 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        all_modules = CareerPathModule.objects.filter(
-            career_path=career_path
-        ).values_list('module_id', flat=True)
-
+        # TRUE SOURCE OF TRUTH: Query active user progress items, NOT static base tracks
+        user_progress_records = UserProgress.objects.filter(enrollment=enrollment).select_related('module')
         selected_set = set(str(mid) for mid in selected_module_ids)
 
         removed_count = 0
-        added_count = 0
 
-        for module_id in all_modules:
-            module_id_str = str(module_id)
+        for progress in user_progress_records:
+            module_id_str = str(progress.module.id)
+
+            # If the user UNCHECKED this learning module item, process deletion
             if module_id_str not in selected_set:
-                try:
-                    module = LearningModule.objects.get(id=module_id)
-                    if not module.is_required:
-                        deleted, _ = UserProgress.objects.filter(
-                            user=user,
-                            module_id=module_id,
-                            enrollment=enrollment
-                        ).delete()
-                        if deleted:
-                            removed_count += 1
-                except LearningModule.DoesNotExist:
-                    pass
+                # Safety guard: Never remove structural core/mandatory requirements
+                if progress.module.is_required:
+                    continue
 
-        for module_id in selected_set:
-            try:
-                module = LearningModule.objects.get(id=module_id)
-                if CareerPathModule.objects.filter(career_path=career_path, module=module).exists():
-                    obj, created = UserProgress.objects.get_or_create(
-                        user=user,
-                        module=module,
-                        enrollment=enrollment,
-                        defaults={
-                            'status': 'not_started',
-                            'progress_percent': 0,
-                            'time_spent_seconds': 0
-                        }
-                    )
-                    if created:
-                        added_count += 1
-            except LearningModule.DoesNotExist:
-                pass
+                progress.delete()
+                removed_count += 1
 
+        # Run calculation update engine to shift metrics down instantly
         enrollment.update_progress()
 
         return Response({
@@ -383,10 +370,8 @@ class CareerPathViewSet(viewsets.ModelViewSet):
             'enrollment_id': str(enrollment.id),
             'progress_percent': float(enrollment.progress_percent),
             'status': enrollment.status,
-            'removed_count': removed_count,
-            'added_count': added_count,
-            'selected_modules_count': len(selected_set)
-        })
+            'removed_count': removed_count
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='available-modules')
     def available_modules(self, request, pk=None):
@@ -397,7 +382,6 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
         if enrollment_id:
             enrollment_id = enrollment_id.strip().rstrip('/')
-
             try:
                 enrollment_uuid = uuid.UUID(enrollment_id)
             except ValueError:
@@ -413,6 +397,7 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                     career_path=career_path
                 ).first()
 
+        # Get modules currently attached to this career path
         path_module_ids = set(
             CareerPathModule.objects.filter(
                 career_path=career_path
@@ -424,12 +409,18 @@ class CareerPathViewSet(viewsets.ModelViewSet):
 
         if enrollment_obj:
             qs = UserProgress.objects.filter(enrollment=enrollment_obj)
-            user_module_ids = set(qs.values_list('module_id', flat=True))
+            # FIX: Convert UUID objects explicitly to strings if you plan to check against strings
+            user_module_ids = set(str(mid) for mid in qs.values_list('module_id', flat=True))
             completed_module_ids = set(
-                qs.filter(status='completed').values_list('module_id', flat=True)
+                str(mid) for mid in qs.filter(status='completed').values_list('module_id', flat=True)
             )
 
-        modules = LearningModule.objects.filter(id__in=path_module_ids)
+        # CRITICAL CHOICE HERE:
+        # Option A: If you want all modules in the DB NOT currently assigned to the path:
+        modules = LearningModule.objects.exclude(id__in=path_module_ids)
+
+        # Option B: If you only want unselected/incompleted modules within this career path, keep your original:
+        # modules = LearningModule.objects.filter(id__in=path_module_ids)
 
         search = request.query_params.get('search', '').lower()
         content_type = request.query_params.get('content_type')
@@ -438,10 +429,10 @@ class CareerPathViewSet(viewsets.ModelViewSet):
         result = []
 
         for module in modules:
-            module_id = module.id
+            module_id_str = str(module.id)
 
-            # Exclude if already selected OR completed
-            if str(module_id) in user_module_ids or str(module_id) in completed_module_ids:
+            # This string-to-string lookup will now work flawlessly
+            if module_id_str in user_module_ids or module_id_str in completed_module_ids:
                 continue
 
             if search and search not in module.title.lower() and search not in (module.description or '').lower():
@@ -454,7 +445,7 @@ class CareerPathViewSet(viewsets.ModelViewSet):
                 continue
 
             result.append({
-                "id": str(module_id),
+                "id": module_id_str,
                 "title": module.title,
                 "description": module.description,
                 "content_type": module.content_type,

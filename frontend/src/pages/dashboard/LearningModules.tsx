@@ -31,7 +31,6 @@ const LearningModules: React.FC = () => {
       setError(null);
 
       const response = await api.get('/learning/modules/');
-      console.log('Modules API Response:', response.data);
 
       // Extract modules array from paginated response
       let modulesData = [];
@@ -44,13 +43,10 @@ const LearningModules: React.FC = () => {
         modulesData = [];
       }
 
-      console.log('Extracted modules:', modulesData.length);
-
       // If authenticated, try to fetch progress
       if (isAuthenticated && modulesData.length > 0) {
         try {
           const progressResponse = await api.get('/progress/user-progress/');
-          console.log('Progress Response:', progressResponse.data);
 
           let progressData = [];
           if (progressResponse.data && progressResponse.data.results) {
@@ -74,7 +70,6 @@ const LearningModules: React.FC = () => {
 
           setModules(modulesWithProgress);
         } catch (progressErr) {
-          console.log('Could not fetch progress, showing modules without progress');
           setModules(modulesData.map((m: Module) => ({
             ...m,
             status: 'not_started',

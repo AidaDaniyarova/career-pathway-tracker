@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { adminAPI } from '../../services/api';
 import type { LearningModule } from '../../types';
+import {showToast} from "../../components/Toast.tsx";
+import axios from "axios";
 
 const ModulesList: React.FC = () => {
   const [items, setItems] = useState<LearningModule[]>([]);
@@ -9,6 +12,9 @@ const ModulesList: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<LearningModule | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [scraping, setScraping] = useState(false);
+  const token = localStorage.getItem('access_token');
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -57,6 +63,26 @@ const ModulesList: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const handleScrape = async () => {
+  setScraping(true);
+  try {
+    const response = await axios.post('/api/scraper/scrape/',
+      {
+        search_terms: ['python', 'javascript', 'react', 'django', 'java', 'data science'],
+        max_courses: 10
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    showToast(`Scraped ${response.data.result.created} new courses!`, 'success');
+    fetchData();
+  } catch (err: any) {
+    console.error('Scrape error:', err);
+    showToast(err.response?.data?.error || 'Scraping failed', 'error');
+  } finally {
+    setScraping(false);
+  }
+};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,6 +202,21 @@ const ModulesList: React.FC = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Learning Modules</h2>
+        <div className="flex gap-3">
+          <button
+            onClick={handleScrape}
+            disabled={scraping}
+            className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+          >
+            {scraping ? 'Scraping...' : '🌐 Scrape from Coursera'}
+          </button>
+          <button
+            onClick={() => navigate('/admin/scrape-courses')}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            Advanced Scraper
+          </button>
+        </div>
         <button
           onClick={() => {
             setEditingItem(null);
