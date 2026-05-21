@@ -226,9 +226,26 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             user=user
         ).exclude(status='not_started').count()
         total_xp = user.total_xp
+
+        # FIXED: QuizResponse doesn't have a 'score' field - use career_scores instead
         quiz_attempts = QuizResponse.objects.filter(user=user)
-        avg_quiz_score = quiz_attempts.aggregate(Avg('score'))['score__avg'] or 0
         total_quizzes = quiz_attempts.count()
+
+        # Calculate average quiz score from career_scores if available
+        avg_quiz_score = 0
+        if total_quizzes > 0:
+            total_score_sum = 0
+            score_count = 0
+            for attempt in quiz_attempts:
+                if attempt.career_scores:
+                    # Get the highest score from career_scores or average of all
+                    scores = list(attempt.career_scores.values())
+                    if scores:
+                        total_score_sum += max(scores)  # Use highest matching career score
+                        score_count += 1
+            if score_count > 0:
+                avg_quiz_score = total_score_sum / score_count
+
         cv_count = CV.objects.filter(user=user).count()
         skill_count = UserSkill.objects.filter(user=user).count()
         avg_skill_level = UserSkill.objects.filter(user=user).aggregate(
@@ -240,6 +257,7 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         total_hours = total_time_spent // 3600
         total_minutes = (total_time_spent % 3600) // 60
         current_streak = self._calculate_streak(user)
+        longest_streak = self._get_longest_streak(user)
 
         return {
             'enrollments': {
@@ -255,8 +273,8 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             },
             'xp': {
                 'total': total_xp,
-                'level': (total_xp // 100) + 1,
-                'next_level_xp': ((total_xp // 100) + 1) * 100 - total_xp
+                'level': (total_xp // 100) + 1 if total_xp > 0 else 1,
+                'next_level_xp': (((total_xp // 100) + 1) * 100 - total_xp) if total_xp > 0 else 100
             },
             'quizzes': {
                 'taken': total_quizzes,
@@ -277,29 +295,71 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             },
             'streak': {
                 'current': current_streak,
-                'longest': self._get_longest_streak(user)
+                'longest': longest_streak
             }
         }
 
     def _calculate_streak(self, user):
-        """Calculate current daily activity streak"""
-        completed_exists = UserProgress.objects.filter(
+        """Calculate current daily activity streak based on completed modules"""
+        from datetime import date, timedelta
+
+        # Get all completion dates
+        completion_dates = UserProgress.objects.filter(
             user=user,
-            status='completed'
-        ).exists()
-        if completed_exists:
-            return 1
-        return 0
+            status='completed',
+            updated_at__isnull=False
+        ).dates('updated_at', 'day').distinct().order_by('-updated_at')
+
+        if not completion_dates:
+            return 0
+
+        # Convert to list and sort
+        dates = list(completion_dates)
+        if not dates:
+            return 0
+
+        # Calculate streak
+        streak = 1
+        today = timezone.now().date()
+
+        # Check if last activity was today or yesterday
+        if dates[0] < today - timedelta(days=1):
+            return 0
+
+        for i in range(len(dates) - 1):
+            if (dates[i] - dates[i + 1]).days == 1:
+                streak += 1
+            else:
+                break
+
+        return streak
 
     def _get_longest_streak(self, user):
         """Calculate longest streak ever"""
-        completed_count = UserProgress.objects.filter(
+        from datetime import timedelta
+
+        # Get all completion dates
+        completion_dates = UserProgress.objects.filter(
             user=user,
-            status='completed'
-        ).count()
-        if completed_count > 0:
-            return min(completed_count, 30)
-        return 0
+            status='completed',
+            updated_at__isnull=False
+        ).dates('updated_at', 'day').distinct().order_by('updated_at')
+
+        dates = list(completion_dates)
+        if not dates:
+            return 0
+
+        longest = 1
+        current = 1
+
+        for i in range(1, len(dates)):
+            if (dates[i] - dates[i - 1]).days == 1:
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 1
+
+        return longest
 
 
 class ProfileAvatarView(generics.UpdateAPIView):
