@@ -116,7 +116,7 @@ const ProfileManagement: React.FC = () => {
       };
 
 
-      const response = await api.put('/users/profile/', updateData);
+      await api.put('/users/profile/', updateData);
 
       setMessage({ type: 'success', text: 'Profile updated successfully!' });
 
