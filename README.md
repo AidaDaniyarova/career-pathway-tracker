@@ -58,7 +58,7 @@ All dependencies are listed in `requirements.txt`
 
 ```bash
 git clone https://github.com/AidaDaniyarova/career-pathway-tracker.git
-cd career-pathway-tracker
+cd career-pathway-tracker/backend
 ```
 
 ### 2. Create Virtual Environment
@@ -78,7 +78,7 @@ source venv/bin/activate
 ### 3. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+python.exe -m pip install -r requirements.txt
 ```
 
 ### 4. Environment Configuration
@@ -107,6 +107,7 @@ HUGGINGFACE_API_KEY=your_huggingface_key
 For Development (SQLite - No setup needed):
 ```bash
 cd backend/tracker
+python manage.py makemigrations
 python manage.py migrate
 ```
 
@@ -117,6 +118,7 @@ createdb career_tracker
 
 # Run migrations
 cd backend/tracker
+python manage.py makemigrations
 python manage.py migrate
 ```
 
@@ -129,7 +131,7 @@ python manage.py createsuperuser
 ### 7. Load Initial Data
 
 ```bash
-python python populate_db.py
+python populate_db.py
 ```
 
 ## Running the Application
@@ -137,7 +139,6 @@ python python populate_db.py
 ### Start Development Server
 ## Backend
 ```bash
-cd backend/tracker
 python manage.py runserver
 ```
 
@@ -145,6 +146,7 @@ The application will be available at: `http://127.0.0.1:8000/`
 ## Frontend
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
 
