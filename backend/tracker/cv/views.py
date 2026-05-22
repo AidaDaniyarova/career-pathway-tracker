@@ -95,7 +95,7 @@ class CVViewSet(viewsets.ModelViewSet):
             user=request.user,
             title=f"{original.title} (Copy)",
             content=original.content,
-            template=original.template
+            is_default=False
         )
 
         serializer = self.get_serializer(new_cv)

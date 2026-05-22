@@ -12,6 +12,7 @@ class Skill(models.Model):
 
     class Meta:
         db_table = 'skills'
+        ordering = ['name']
 
     def __str__(self):
         return self.name
@@ -33,6 +34,7 @@ class UserSkill(models.Model):
     class Meta:
         db_table = 'user_skills'
         unique_together = ['user', 'skill']
+        ordering = ['-created_at']
 
     def __str__(self):
         return f"{self.user.username} - {self.skill.name}: {self.level}"
