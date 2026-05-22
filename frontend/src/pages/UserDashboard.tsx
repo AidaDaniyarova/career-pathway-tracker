@@ -34,7 +34,7 @@ const UserDashboard: React.FC = () => {
         {path: '/dashboard/progress', label: '📊 Progress', icon: '📊', public: false},
         {path: '/dashboard/career-paths', label: '🎯 Career Paths', icon: '🎯', public: true},
         {path: '/dashboard/learning', label: '📚 Learning', icon: '📚', public: true},
-        {path: '/dashboard/quizzes', label: '📝 Quizzes', icon: '📝', public: true},
+        {path: '/dashboard/quizzes', label: '📝 Quizzes', icon: '📝', public: false},
         {path: '/dashboard/recommendations', label: '✨ Recommendations', icon: '✨', public: false},
         {path: '/dashboard/cv-builder', label: '📄 CV Builder', icon: '📄', public: false},
         {path: '/dashboard/job-scanner', label: '🔍 Job Scanner', icon: '🔍', public: false},

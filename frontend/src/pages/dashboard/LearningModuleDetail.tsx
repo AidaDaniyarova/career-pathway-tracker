@@ -385,7 +385,7 @@ const LearningModuleDetail: React.FC = () => {
                   disabled={starting || !module.is_available}
                   className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
                 >
-                  {starting ? 'Starting...' : '▶ Start Module'}
+                  {starting ? 'Starting...' : 'Add this module to your path first'}
                 </button>
               )}
             </div>

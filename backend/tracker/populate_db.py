@@ -14,6 +14,7 @@ from ai.models import JobScan, Recommendation
 from cv.models import CV
 from quizzes.models import CareerQuiz, QuizQuestion, QuizOption
 
+
 # -----------------------------
 # USERS
 # -----------------------------
@@ -102,20 +103,114 @@ def create_paths():
     print("\nCreating career paths...")
 
     data = [
+        # Original paths
         ("Full Stack Developer", "full-stack-developer"),
         ("Data Scientist", "data-scientist"),
         ("DevOps Engineer", "devops-engineer"),
+
+        # New paths
+        ("Software Developer", "software-developer"),
+        ("Product Manager", "product-manager"),
+        ("UX Designer", "ux-designer"),
+        ("Frontend Developer", "frontend-developer"),
+        ("Data Analyst", "data-analyst"),
+        ("Cybersecurity Analyst", "cybersecurity-analyst"),
+        ("QA Engineer", "qa-engineer"),
+        ("Cloud Architect", "cloud-architect"),
+        ("Security Engineer", "security-engineer"),
     ]
 
     paths = []
     for title, slug in data:
-        p, _ = CareerPath.objects.get_or_create(
+        p, created = CareerPath.objects.get_or_create(
             slug=slug,
-            defaults={"title": title, "industry": "Tech"}
+            defaults={
+                "title": title,
+                "industry": get_industry_for_path(title),
+                "description": get_description_for_path(title),
+                "avg_salary_min": get_salary_range(title)[0],
+                "avg_salary_max": get_salary_range(title)[1],
+                "growth_outlook": get_growth_outlook(title)
+            }
         )
         paths.append(p)
-
     return paths
+
+
+def get_industry_for_path(title):
+    """Return industry based on career path"""
+    industries = {
+        "Software Developer": "Technology",
+        "Product Manager": "Product Management",
+        "UX Designer": "Design",
+        "Frontend Developer": "Technology",
+        "Data Analyst": "Data & Analytics",
+        "Cybersecurity Analyst": "Security",
+        "QA Engineer": "Quality Assurance",
+        "Cloud Architect": "Cloud Computing",
+        "Security Engineer": "Security",
+        "Full Stack Developer": "Technology",
+        "Data Scientist": "Data & Analytics",
+        "DevOps Engineer": "DevOps"
+    }
+    return industries.get(title, "Technology")
+
+
+def get_description_for_path(title):
+    """Return description based on career path"""
+    descriptions = {
+        "Software Developer": "Design, code, and maintain software applications. Work on backend systems, databases, and APIs.",
+        "Product Manager": "Lead product development, define requirements, and coordinate between stakeholders and development teams.",
+        "UX Designer": "Create intuitive and engaging user experiences through research, wireframing, and prototyping.",
+        "Frontend Developer": "Build responsive web applications using modern frameworks like React, Vue, or Angular.",
+        "Data Analyst": "Analyze data to extract insights, create visualizations, and support data-driven decision making.",
+        "Cybersecurity Analyst": "Protect systems and networks from security threats, monitor for breaches, and implement security measures.",
+        "QA Engineer": "Ensure software quality through testing, automation, and quality assurance processes.",
+        "Cloud Architect": "Design and manage cloud infrastructure on AWS, Azure, or Google Cloud Platform.",
+        "Security Engineer": "Build and maintain security systems, conduct security assessments, and respond to incidents.",
+        "Full Stack Developer": "Build complete web applications working with both frontend and backend technologies.",
+        "Data Scientist": "Use machine learning and statistical methods to analyze complex data and build predictive models.",
+        "DevOps Engineer": "Manage CI/CD pipelines, infrastructure automation, and system reliability."
+    }
+    return descriptions.get(title, f"Career path for {title}")
+
+
+def get_salary_range(title):
+    """Return min and max salary for career path"""
+    salaries = {
+        "Software Developer": (60000, 120000),
+        "Product Manager": (80000, 160000),
+        "UX Designer": (55000, 110000),
+        "Frontend Developer": (55000, 115000),
+        "Data Analyst": (50000, 100000),
+        "Cybersecurity Analyst": (65000, 130000),
+        "QA Engineer": (45000, 90000),
+        "Cloud Architect": (100000, 180000),
+        "Security Engineer": (75000, 150000),
+        "Full Stack Developer": (65000, 130000),
+        "Data Scientist": (70000, 140000),
+        "DevOps Engineer": (80000, 160000)
+    }
+    return salaries.get(title, (50000, 100000))
+
+
+def get_growth_outlook(title):
+    """Return growth outlook for career path"""
+    outlooks = {
+        "Software Developer": "Very High",
+        "Product Manager": "High",
+        "UX Designer": "High",
+        "Frontend Developer": "Very High",
+        "Data Analyst": "Very High",
+        "Cybersecurity Analyst": "Very High",
+        "QA Engineer": "Moderate",
+        "Cloud Architect": "Very High",
+        "Security Engineer": "Very High",
+        "Full Stack Developer": "Very High",
+        "Data Scientist": "Very High",
+        "DevOps Engineer": "Very High"
+    }
+    return outlooks.get(title, "High")
 
 
 # -----------------------------
@@ -613,6 +708,7 @@ your preferences!"""
             print(f"  - {career}")
         print("\nPlease create these career paths for better quiz recommendations.")
 
+
 # -----------------------------
 # CV + ATS SCORE
 # -----------------------------
@@ -689,6 +785,7 @@ def main():
     create_cvs(users)
     create_job_scans(users)
     create_recommendations(users, paths)
+    create_career_quiz()
 
     print("\n===== DONE =====")
     print(f"Users: {User.objects.count()}")
