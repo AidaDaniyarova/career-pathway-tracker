@@ -1,6 +1,7 @@
 import requests
 import json
 import re
+import time
 from typing import List, Dict, Any
 from django.conf import settings
 import logging
@@ -74,66 +75,84 @@ def _calculate_experience_match(cv_text: str, job_text: str) -> float:
         return max(0, 100 - ((job_years - cv_years) * 15))
 
 
+# Hugging Face Inference Providers, "hf-inference" provider: models hosted by
+# Hugging Face itself. Replaces the retired api-inference.huggingface.co host.
+HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models/"
+
+
 class HuggingFaceService:
-    """Service for interacting with Hugging Face Inference API"""
+    """Service for interacting with Hugging Face Inference Providers.
+
+    Every AI feature has a local fallback; the API is used only when HF_TOKEN is
+    set and Hugging Face accepts it. Failures pause API calls for a while instead
+    of slowing every request down.
+    """
+
+    UNREACHABLE_PAUSE_SECONDS = 300   # network errors, timeouts, 5xx
+    REJECTED_PAUSE_SECONDS = 3600     # bad token, no credits
 
     def __init__(self):
-        self.api_key = settings.HUGGINGFACE_API_KEY
-        self.api_url = "https://api-inference.huggingface.co/models/"
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        self.use_huggingface = False  # Flag to track if API is available
+        self.api_url = HF_INFERENCE_URL
+        self._paused_until = 0.0
+        self._warned_missing_token = False
 
-        # Test connection on initialization
-        self._test_connection()
+    @property
+    def api_key(self):
+        # Read on each call so tests and settings overrides take effect
+        return getattr(settings, 'HF_TOKEN', None)
 
-    def _test_connection(self):
-        """Test if Hugging Face API is reachable"""
-        try:
-            import socket
-            socket.gethostbyname('api-inference.huggingface.co')
-            self.use_huggingface = True
-            logger.info("Hugging Face API is reachable")
-        except socket.gaierror:
-            self.use_huggingface = False
-            logger.warning("Hugging Face API is not reachable. Using fallback methods.")
+    def _pause(self, seconds: int):
+        self._paused_until = time.monotonic() + seconds
 
-    def _make_request(self, model: str, payload: Dict) -> Dict:
-        """Make request to Hugging Face API with better error handling"""
+    def _make_request(self, model: str, payload: Dict, timeout: int = 20):
+        """POST to the Hugging Face API. Returns parsed JSON, or None to use the fallback."""
         if not self.api_key:
-            logger.warning("Hugging Face API key not configured")
+            if not self._warned_missing_token:
+                logger.info("HF_TOKEN is not set; AI features use their built-in fallback.")
+                self._warned_missing_token = True
             return None
 
-        if not self.use_huggingface:
-            logger.info("Hugging Face API unavailable, using fallback")
+        if time.monotonic() < self._paused_until:
             return None
 
         try:
             response = requests.post(
                 f"{self.api_url}{model}",
-                headers=self.headers,
+                headers={"Authorization": f"Bearer {self.api_key}"},
                 json=payload,
-                timeout=10,  # Reduced timeout
-                verify=True  # SSL verification
+                timeout=timeout,
             )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logger.warning("Hugging Face API is not reachable (%s); using fallback for %d minutes.",
+                           type(e).__name__, self.UNREACHABLE_PAUSE_SECONDS // 60)
+            self._pause(self.UNREACHABLE_PAUSE_SECONDS)
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error("Hugging Face request failed (%s); using fallback.", type(e).__name__)
+            return None
 
-            if response.status_code == 200:
+        status_code = response.status_code
+        if status_code == 200:
+            try:
                 return response.json()
-            else:
-                logger.error(f"Hugging Face API error: {response.status_code} - {response.text}")
+            except ValueError:
+                logger.error("Hugging Face returned a non-JSON response for %s; using fallback.", model)
                 return None
-        except requests.exceptions.Timeout:
-            logger.error(f"Hugging Face request timeout for model {model}")
-            return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Hugging Face connection error: {e}")
-            self.use_huggingface = False  # Disable further attempts
-            return None
-        except Exception as e:
-            logger.error(f"Hugging Face request failed: {e}")
-            return None
+        if status_code in (401, 403):
+            logger.error("Hugging Face rejected HF_TOKEN (HTTP %s). Create a fine-grained token with the "
+                         "'Make calls to Inference Providers' permission and set it as HF_TOKEN. "
+                         "Using fallback.", status_code)
+            self._pause(self.REJECTED_PAUSE_SECONDS)
+        elif status_code == 402:
+            logger.error("Hugging Face Inference Providers credits are used up (HTTP 402); using fallback.")
+            self._pause(self.REJECTED_PAUSE_SECONDS)
+        elif status_code == 429 or status_code >= 500:
+            logger.warning("Hugging Face API is unavailable (HTTP %s); using fallback for %d minutes.",
+                           status_code, self.UNREACHABLE_PAUSE_SECONDS // 60)
+            self._pause(self.UNREACHABLE_PAUSE_SECONDS)
+        else:
+            logger.error("Hugging Face API error for %s: HTTP %s - %s", model, status_code, response.text[:200])
+        return None
 
     def extract_skills_from_job(self, job_description: str) -> List[str]:
         """Extract skills from job description using keyword matching (always use fallback)"""
@@ -438,7 +457,29 @@ class HuggingFaceService:
         return questions[:12]  # Return up to 12 questions
 
     def summarize_job_description(self, job_description: str) -> str:
-        """Summarize job description (always use fallback)"""
+        """Summarize a job description with Hugging Face, falling back to the first sentences."""
+        summary = self._summarize_with_huggingface(job_description)
+        if summary:
+            return summary
+        return self._summarize_fallback(job_description)
+
+    def _summarize_with_huggingface(self, job_description: str):
+        # Short texts don't need a model; long ones are cut to fit the model's input limit
+        if len(job_description) < 200:
+            return None
+        model = settings.HUGGINGFACE_MODELS['summarizer']
+        result = self._make_request(model, {"inputs": job_description[:3000]})
+        if isinstance(result, list) and result:
+            result = result[0]
+        if isinstance(result, dict):
+            summary = str(result.get('summary_text') or '').strip()
+            if summary:
+                return summary
+        if result is not None:
+            logger.error("Unexpected Hugging Face summarization response; using fallback.")
+        return None
+
+    def _summarize_fallback(self, job_description: str) -> str:
         # Fallback: return first few sentences
         sentences = job_description.split('. ')
         summary = '. '.join(sentences[:3])

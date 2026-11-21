@@ -47,5 +47,7 @@ CACHES = {
 }
 
 # Mock external services
-HUGGINGFACE_API_KEY = 'test_key'
+# No Hugging Face token: tests must never call the real API (tests that need it set one and mock requests)
+HF_TOKEN = None
+HUGGINGFACE_API_KEY = None
 APIFY_API_TOKEN = 'test_token'

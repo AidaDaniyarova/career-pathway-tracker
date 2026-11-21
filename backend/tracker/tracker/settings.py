@@ -356,7 +356,10 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # AI Settings
 # OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-HUGGINGFACE_API_KEY = os.getenv('HUGGINGFACE_API_KEY')
+# Hugging Face Inference Providers token: a fine-grained token with the
+# "Make calls to Inference Providers" permission. HUGGINGFACE_API_KEY is the old name.
+HF_TOKEN = (os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_API_KEY') or '').strip() or None
+HUGGINGFACE_API_KEY = HF_TOKEN
 HUGGINGFACE_MODELS = {
     'job_matcher': 'cross-encoder/ms-marco-MiniLM-L-6-v2',  # For job-CV matching
     'skill_extractor': 'dslim/bert-base-NER',  # For extracting skills

@@ -774,3 +774,70 @@ class DeploymentConfigTests(APITestCase):
         with override_settings(ALLOWED_HOSTS=['example.com']):
             response = self.client.get('/api/learning/career-paths/', HTTP_HOST='evil.test')
         self.assertEqual(response.status_code, 400)
+
+
+class HuggingFaceServiceTests(APITestCase):
+    """Hugging Face calls go to the Inference Providers router and fall back cleanly."""
+
+    JOB = ("We are hiring a junior Python developer in London to build Django REST APIs, "
+           "write automated tests and work closely with React frontend engineers. "
+           "You will join an agile team of eight and deploy to AWS using GitHub Actions.")
+
+    def _service(self):
+        from ai.huggingface_service import HuggingFaceService
+        return HuggingFaceService()
+
+    def _response(self, status_code, payload=None):
+        from unittest.mock import Mock
+        response = Mock(status_code=status_code, text='')
+        response.json.return_value = payload
+        return response
+
+    def test_uses_router_endpoint_not_retired_host(self):
+        from ai.huggingface_service import HF_INFERENCE_URL
+        self.assertEqual(HF_INFERENCE_URL, 'https://router.huggingface.co/hf-inference/models/')
+
+    @patch('ai.huggingface_service.requests.post')
+    def test_without_token_uses_fallback_and_no_network(self, mock_post):
+        from django.test import override_settings
+        with override_settings(HF_TOKEN=None):
+            summary = self._service().summarize_job_description(self.JOB)
+        mock_post.assert_not_called()
+        self.assertTrue(self.JOB.startswith(summary.rstrip('.')[:50]))
+
+    @patch('ai.huggingface_service.requests.post')
+    def test_summary_from_huggingface(self, mock_post):
+        from django.test import override_settings
+        mock_post.return_value = self._response(200, [{'summary_text': ' Junior Python role in London. '}])
+        with override_settings(HF_TOKEN='hf_test'):
+            summary = self._service().summarize_job_description(self.JOB)
+        self.assertEqual(summary, 'Junior Python role in London.')
+        url = mock_post.call_args.args[0]
+        self.assertEqual(url, 'https://router.huggingface.co/hf-inference/models/facebook/bart-large-cnn')
+        self.assertEqual(mock_post.call_args.kwargs['headers']['Authorization'], 'Bearer hf_test')
+
+    @patch('ai.huggingface_service.requests.post')
+    def test_rejected_token_is_reported_as_token_problem_and_paused(self, mock_post):
+        from django.test import override_settings
+        mock_post.return_value = self._response(401, {'error': 'Invalid username or password.'})
+        service = self._service()
+        with override_settings(HF_TOKEN='hf_bad'), self.assertLogs('ai.huggingface_service', 'ERROR') as logs:
+            first = service.summarize_job_description(self.JOB)
+            second = service.summarize_job_description(self.JOB)
+        self.assertTrue(first)  # fallback summary
+        self.assertEqual(first, second)
+        self.assertEqual(mock_post.call_count, 1)  # paused after the 401
+        output = '\n'.join(logs.output)
+        self.assertIn('rejected HF_TOKEN', output)
+        self.assertNotIn('not reachable', output)
+        self.assertNotIn('hf_bad', output)
+
+    @patch('ai.huggingface_service.requests.post')
+    def test_network_error_is_reported_as_not_reachable(self, mock_post):
+        import requests
+        from django.test import override_settings
+        mock_post.side_effect = requests.exceptions.ConnectionError('dns failure')
+        with override_settings(HF_TOKEN='hf_test'), self.assertLogs('ai.huggingface_service', 'WARNING') as logs:
+            summary = self._service().summarize_job_description(self.JOB)
+        self.assertTrue(summary)
+        self.assertIn('not reachable', '\n'.join(logs.output))

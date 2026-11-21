@@ -33,5 +33,6 @@ services:
         sync: false
       - key: CORS_ALLOWED_ORIGINS
         sync: false
-      - key: HUGGINGFACE_API_KEY
+      # Hugging Face fine-grained token ("Make calls to Inference Providers"); optional
+      - key: HF_TOKEN
         sync: false

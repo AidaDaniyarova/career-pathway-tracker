@@ -17,4 +17,6 @@ DATABASE_URL=
 # DB_PORT=5432
 
 REDIS_URL=redis://localhost:6379
-HUGGINGFACE_API_KEY=
+# Optional. Hugging Face fine-grained token with the "Make calls to Inference Providers"
+# permission (https://huggingface.co/settings/tokens). HUGGINGFACE_API_KEY still works as an old name.
+HF_TOKEN=

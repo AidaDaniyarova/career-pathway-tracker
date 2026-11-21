@@ -51,7 +51,7 @@ services:
       REDIS_URL: redis://redis:6379
       CACHE_REDIS_URL: redis://redis:6379/1
       WEB_CONCURRENCY: 3
-      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy

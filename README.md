@@ -1,314 +1,174 @@
 # Career Pathway Tracker
 
-A comprehensive career development platform that helps users track their learning progress, build CVs, practice interviews, and get AI-powered career recommendations.
+A career development platform for graduates moving into tech: take a career quiz, follow career paths made of learning modules, track progress and XP, build and analyse a CV, and get AI-assisted career recommendations.
 
-## Table of Contents
-- [Features](#features)
-- [Technology Stack](#technology-stack)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Running the Application](#running-the-application)
-- [Running Tests](#running-tests)
-- [Backend API Documentation](#backend-api-documentation)
-- [Project Structure](#project-structure)
-- [Troubleshooting](#troubleshooting)
+## Live demo
+
+**Live app:** https://career-pathway-tracker-gold.vercel.app
+
+**Demo login:** `john@example.com` / `password123`
+
+> The backend runs on Render's free tier and sleeps after ~15 minutes without traffic. The first request after that can take about a minute while it wakes up; after that it is fast.
+
+### What to try
+
+1. Register a new account, or sign in with the demo account.
+2. Accept the AI consent dialog. AI features stay off until you do.
+3. Take the career quiz and look at the recommended paths.
+4. Browse career paths, enrol in one, and work through its learning modules.
+5. Build a CV in the CV builder, export it, and run the CV analysis against a job description.
+6. Open AI recommendations to see paths ranked by your skills, progress and quiz results.
+
+### Architecture
+
+React + TypeScript (Vercel) → Django REST API in Docker (Render) → Neon Postgres. GitHub Actions CI gates every deploy.
 
 ## Features
 
-- User Authentication: JWT-based authentication with registration and login
-- Career Paths: Curated learning paths for different careers
-- Skill Management: Track and manage user skills with proficiency levels
-- Progress Tracking: Monitor learning progress with XP and levels
-- CV Builder: Create, edit, and export professional CVs
-- AI Recommendations: Get personalized career recommendations
-- Job Scanner: Analyze CV against job descriptions
-- Interview Practice: Generate and practice interview questions
-- Quiz System: Career assessment quizzes
-- Admin Dashboard: Comprehensive admin interface
+- **Accounts:** JWT authentication (register, login, logout, token refresh) and a user profile with an avatar.
+- **Career quiz:** a weighted multiple-choice quiz that scores every career path.
+- **Career paths and modules:** paths with required skills, ordered learning modules, enrolment and progress tracking with XP.
+- **Skills:** track your skills with a proficiency level from 1 to 5.
+- **CV builder:** create, edit, duplicate and set a default CV; export to PDF or Word.
+- **CV analysis:** match a CV against a job description and list missing skills and keywords.
+- **AI features:** career recommendations, skill-gap analysis, interview question generation, job description summaries and a career-advice chat. Job description summaries use Hugging Face Inference Providers when `HF_TOKEN` is set; everything else, and the summaries when the API is unavailable, uses built-in logic.
+- **Admin dashboard:** manage users, career paths, modules and quizzes.
 
-## Technology Stack
+## Technology stack
 
-### Backend
-- Django 5.2.1 - Web framework
-- Django REST Framework - API development
-- PostgreSQL - Production database
-- SQLite - Development/Testing database
-- JWT - Authentication
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, TypeScript, Vite, Axios |
+| Backend | Django 6, Django REST Framework, SimpleJWT, Gunicorn, WhiteNoise |
+| Database | PostgreSQL (Neon) |
+| AI | Hugging Face Inference Providers (optional; built-in fallback) |
+| Hosting | Vercel (frontend), Render free web service from `backend/Dockerfile` (API) |
+| CI/CD | GitHub Actions (`.github/workflows/ci.yml`, `deploy.yml`), Dependabot |
 
-### AI & External Services
-- Hugging Face API - AI models for recommendations
-- Apify - Web scraping for courses
+## Local setup
 
-### Testing
-- Django Test Framework - Unit and integration tests
+### Prerequisites
 
-## Prerequisites
+- Python 3.13
+- Node.js 22
+- A PostgreSQL database. A free [Neon](https://neon.tech) project works; use a development branch, not production.
 
-### Required Software
-- Python 3.10 or higher
-- PostgreSQL 13+ (production)
-- Git
-
-### Python Packages
-All dependencies are listed in `requirements.txt`
-
-## Installation
-
-### 1. Clone the Repository
+### 1. Backend
 
 ```bash
 git clone https://github.com/AidaDaniyarova/career-pathway-tracker.git
 cd career-pathway-tracker/backend
-```
 
-### 2. Create Virtual Environment
-
-Windows:
-```bash
 python -m venv venv
+# Windows:
 venv\Scripts\activate
-```
-
-Linux/Mac:
-```bash
-python3 -m venv venv
+# macOS / Linux:
 source venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-### 3. Install Dependencies
+Create `backend/.env` from the example and fill it in:
 
 ```bash
-python.exe -m pip install -r requirements.txt
+cp env_example .env
 ```
 
-### 4. Environment Configuration
+- `SECRET_KEY`: generate one with `python -c "import secrets; print(secrets.token_urlsafe(64))"`.
+- `DEBUG=True`: only on your own machine.
+- `DATABASE_URL`: your Neon connection string (`postgresql://...?sslmode=require`).
+- `HF_TOKEN`: optional. A Hugging Face fine-grained token with the "Make calls to Inference Providers" permission. Without it, the AI features use their fallback.
 
-Create a `.env` file in the `backend/tracker/` directory:
+Never commit `.env`.
 
-```env
-# Django Settings
-SECRET_KEY=your-secret-key-here
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
+Create the tables and load the demo data:
 
-# Database (PostgreSQL for production)
-DB_NAME=career_tracker
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_HOST=localhost
-DB_PORT=5432
-
-# AI Services (Optional - app works with fallbacks)
-HUGGINGFACE_API_KEY=your_huggingface_key
-```
-
-### 5. Database Setup
-
-For Development (SQLite - No setup needed):
 ```bash
-cd backend/tracker
-python manage.py makemigrations
+cd tracker
 python manage.py migrate
-```
-
-For Production (PostgreSQL):
-```bash
-# Create PostgreSQL database
-createdb career_tracker
-
-# Run migrations
-cd backend/tracker
-python manage.py makemigrations
-python manage.py migrate
-```
-
-### 6. Create Superuser (Admin Access)
-
-```bash
-python manage.py createsuperuser
-```
-
-### 7. Load Initial Data
-
-```bash
-python populate_db.py
-```
-
-## Running the Application
-
-### Start Development Server
-## Backend
-```bash
+python populate_db.py      # safe to re-run; it never duplicates or deletes data
 python manage.py runserver
 ```
 
-The application will be available at: `http://127.0.0.1:8000/`
-## Frontend
+The API runs at http://127.0.0.1:8000/.
+
+### 2. Frontend
+
+In a second terminal:
+
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-The application will be available at: `http://localhost:3000/`
+The app runs at http://localhost:3000/. The Vite dev server forwards `/api` to the backend on port 8000, so no frontend `.env` is needed locally. `VITE_API_URL` (see `frontend/.env.example`) is only needed when the API is on a different origin, as it is in production.
 
-## Running Tests
+## Tests and checks
 
-### Test Configuration
-
-The project uses SQLite in-memory database for testing. Test settings are in `tracker/test_settings.py`.
-
-### Run All Tests
+Backend tests use an in-memory SQLite database (`tracker/test_settings.py`), so they don't touch your real database:
 
 ```bash
 cd backend/tracker
-python manage.py test --settings=tracker.test_settings
+python manage.py test test --settings=tracker.test_settings
 ```
 
-### Run Specific Test Categories
+Frontend type-check, lint and production build:
 
 ```bash
-# Run with more verbose output
-python manage.py test --settings=tracker.test_settings --verbosity=2
+cd frontend
+npx tsc -b
+npm run lint
+npm run build
 ```
 
-### Quick Test Commands
+CI runs all of these on every push and pull request, along with `manage.py check --deploy`, a missing-migrations check, `pip-audit`, `npm audit` and Docker image builds.
 
-```bash
-# Run and save report
-python manage.py test --settings=tracker.test_settings --verbosity=2 > test_report.txt 2>&1
+## Deployment
 
-# Run with output to console and file
-python manage.py test --settings=tracker.test_settings --verbosity=2 2>&1 | tee test_report.txt
-```
+- **Backend (Render):** `render.yaml` defines a free Docker web service built from `backend/Dockerfile`. Render deploys only after the commit's GitHub checks pass. On start, `backend/start.sh` runs migrations, then Gunicorn.
+- **Frontend (Vercel):** `.github/workflows/deploy.yml` deploys to Vercel after CI succeeds on `main`. Vercel's automatic Git deploys of `main` are off, so the site can't go live ahead of CI.
+- **Database:** Neon Postgres. Render uses the pooled connection string for the app and the direct one for migrations.
 
-### Test Suite Overview
+## API overview
 
-| Test Category | Number of Tests | Description |
-|--------------|----------------|-------------|
-| User Authentication | 2 | Registration, login, profile |
-| Career Paths | 4 | List, detail, enroll, modules |
-| Skills | 4 | CRUD operations for skills |
-| Progress Tracking | 3 | Module progress, XP, dashboard |
-| CV Builder | 7 | Create, edit, delete, duplicate CVs |
-| AI Features | 1 | Career recommendations |
-| Job Scanner | 2 | CV analysis, history |
-| Interview Practice | 3 | Generate questions, save answers |
-| Total | 24 | All tests passing |
+All endpoints are under `/api/`. Apart from register, login and the health check, they need a JWT `Authorization: Bearer <token>` header.
 
-### Expected Test Output
+| Area | Endpoints |
+|---|---|
+| Auth and profile | `users/register/`, `users/login/`, `users/logout/`, `users/token/refresh/`, `users/profile/`, `users/ai-consent/` |
+| Career paths and modules | `learning/career-paths/`, `learning/career-paths/{id}/`, `learning/modules/` |
+| Progress | `progress/enrollments/`, `progress/progress/`, `progress/dashboard/`, `progress/analytics/` |
+| Skills | `skills/skills/`, `skills/user-skills/` |
+| Quiz | `quizzes/quizzes/`, `quizzes/start/`, `quizzes/submit/` |
+| CV | `cv/cvs/`, `cv/cvs/{id}/duplicate/`, `cv/cvs/{id}/export-pdf/`, `cv/cvs/{id}/export-word/`, `cv/templates/` |
+| AI | `ai/recommendations/`, `ai/job-match/`, `ai/job-scans/`, `ai/interview-questions/`, `ai/summarize-job/`, `ai/chat/`, `ai/skill-gap/{career_path_id}/` |
+| Health | `health/` |
 
-```
-Found 24 test(s).
-Creating test database...
-test_get_recommendations ... ok
-test_create_cv ... ok
-...
-----------------------------------------------------------------------
-Ran 24 tests in 0.143s
-
-OK
-Destroying test database...
-```
-
-## Backend API Documentation
-
-### Authentication Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/users/register/` | User registration |
-| POST | `/api/users/login/` | User login |
-| GET | `/api/users/profile/` | Get user profile |
-| PUT/PATCH | `/api/users/profile/` | Update profile |
-
-### Career Path Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/learning/career-paths/` | List career paths |
-| GET | `/api/learning/career-paths/{id}/` | Get career path details |
-| POST | `/api/learning/career-paths/{id}/enroll/` | Enroll in career path |
-| GET | `/api/learning/career-paths/{id}/modules/` | Get modules |
-
-### CV Management Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/cv/cvs/` | List user's CVs |
-| POST | `/api/cv/cvs/` | Create new CV |
-| GET | `/api/cv/cvs/{id}/` | Get CV details |
-| PUT | `/api/cv/cvs/{id}/` | Update CV |
-| DELETE | `/api/cv/cvs/{id}/` | Delete CV |
-| POST | `/api/cv/cvs/{id}/duplicate/` | Duplicate CV |
-| POST | `/api/cv/cvs/{id}/set-default/` | Set as default |
-
-### AI Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/ai/recommendations/` | Get career recommendations |
-| POST | `/api/ai/job-match/` | Analyze CV against job |
-| POST | `/api/ai/interview-questions/` | Generate interview questions |
-| POST | `/api/ai/interview-answers/` | Save interview answers |
-
-## Project Structure
+## Project structure
 
 ```
 career-pathway-tracker/
 ├── backend/
-│   ├── tracker/
-│   │   ├── settings.py          # Main settings
-│   │   ├── test_settings.py     # Test settings (SQLite)
-│   │   ├── urls.py              # Main URL config
-│   │   ├── wsgi.py
-│   │   └── test.py              # Test suite
-│   ├── users/                   # User management app
-│   ├── skills/                  # Skills management app
-│   ├── learning/                # Learning paths app
-│   ├── progress/                # Progress tracking app
-│   ├── cv/                      # CV builder app
-│   ├── ai/                      # AI features app
-│   ├── quizzes/                 # Quiz system app
-│   ├── api/                     # API views
-│   ├── manage.py
+│   ├── Dockerfile, start.sh       # production image (Render)
 │   ├── requirements.txt
-│   └── .env                     # Environment variables
-├── frontend/                    # React frontend (separate)
-├── .gitignore
-└── README.md
+│   ├── env_example                # copy to backend/.env
+│   └── tracker/
+│       ├── manage.py
+│       ├── populate_db.py         # idempotent demo/reference data
+│       ├── test.py                # backend test suite
+│       ├── tracker/               # settings, urls, health check
+│       ├── users/ skills/ learning/ progress/ quizzes/ cv/ ai/
+│       └── admin_dashboard/ api/ course_scraper/
+├── frontend/                      # React + TypeScript (Vite), vercel.json
+├── .github/workflows/             # ci.yml, deploy.yml
+├── render.yaml                    # Render blueprint
+└── docker-compose.yml             # optional self-hosted stack
 ```
 
 ## Troubleshooting
 
-### Common Issues and Solutions
-
-#### 1. Database Migration Errors
-
-```bash
-# Reset migrations
-find . -path "*/migrations/*.py" -not -name "__init__.py" -delete
-python manage.py makemigrations
-python manage.py migrate
-```
-
-#### 2. Hugging Face API Not Reachable
-
-The app has built-in fallbacks. This warning is normal in development.
-
-```python
-# To suppress warnings
-import warnings
-warnings.filterwarnings('ignore', message='Hugging Face API is not reachable')
-```
-
-#### 3. PostgreSQL Connection Issues
-
-```bash
-# Check if PostgreSQL is running
-pg_isready
-
-# Restart PostgreSQL
-sudo service postgresql restart  # Linux
-brew services restart postgresql # Mac
-```
+- **The live app hangs on the first request:** the Render backend is waking up. Wait about a minute and retry.
+- **`Hugging Face rejected HF_TOKEN` in the logs:** the token is missing the Inference Providers permission, or it was revoked or expired. Create a new fine-grained token and update `HF_TOKEN`. The app keeps working on its fallback in the meantime.
+- **`Hugging Face API is not reachable` in the logs:** a network error or timeout. The app uses the fallback for 5 minutes, then tries again.
+- **Database connection errors:** check `DATABASE_URL` in `backend/.env` and that it ends with `?sslmode=require`.
