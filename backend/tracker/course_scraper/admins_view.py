@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from django.shortcuts import render, redirect
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib import messages
@@ -182,6 +184,7 @@ def test_scrape(request):
                 ]
             })
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
+            logger.exception('Course scrape failed')
+            return JsonResponse({'error': 'Scraping failed. Check server logs.'}, status=500)
 
     return JsonResponse({'error': 'Method not allowed'}, status=405)

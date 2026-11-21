@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { showToast } from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import AIDisclaimer from '../../components/AIDisclaimer';
+import type { ApiError } from '../../utils/errors';
 
 interface Recommendation {
   career_path: {
@@ -43,11 +45,7 @@ const Recommendations: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    fetchRecommendations();
-  }, []);
-
-  const fetchRecommendations = async (refresh = false) => {
+  const fetchRecommendations = useCallback(async (refresh = false) => {
     try {
       const token = localStorage.getItem('access_token');
       const url = refresh ? '/api/ai/recommendations/?refresh=true' : '/api/ai/recommendations/';
@@ -70,14 +68,23 @@ const Recommendations: React.FC = () => {
       if (refresh) {
         showToast('Recommendations refreshed!', 'success');
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch recommendations:', err);
       showToast('Failed to load recommendations', 'error');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchRecommendations();
+    };
+    run();
+  }, [fetchRecommendations]);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -113,6 +120,7 @@ const Recommendations: React.FC = () => {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      <AIDisclaimer feature="Career recommendations" />
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>

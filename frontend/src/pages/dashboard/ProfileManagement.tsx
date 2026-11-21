@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api'; // Use your configured api instance
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
+import AIConsentSettings from '../../components/AIConsentSettings';
+import type { ApiError } from '../../utils/errors';
 
 interface Skill {
   id: string;  // This should be UUID from backend
@@ -43,12 +45,7 @@ const ProfileManagement: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  useEffect(() => {
-    fetchProfile();
-    fetchAvailableSkills();
-  }, []);
-
-  const fetchProfile = async () => {
+  const fetchProfile = useCallback(async () => {
     try {
       const response = await api.get('/users/profile/');
 
@@ -69,9 +66,9 @@ const ProfileManagement: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchAvailableSkills = async () => {
+  const fetchAvailableSkills = useCallback(async () => {
     try {
       const response = await api.get('/skills/skills/');
 
@@ -90,7 +87,16 @@ const ProfileManagement: React.FC = () => {
       console.error('Failed to fetch skills:', err);
       setAvailableSkills([]);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchProfile();
+      fetchAvailableSkills();
+    };
+    run();
+  }, [fetchProfile, fetchAvailableSkills]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,7 +121,6 @@ const ProfileManagement: React.FC = () => {
         skills: skillsData
       };
 
-
       await api.put('/users/profile/', updateData);
 
       setMessage({ type: 'success', text: 'Profile updated successfully!' });
@@ -124,7 +129,8 @@ const ProfileManagement: React.FC = () => {
       setTimeout(() => {
         fetchProfile();
       }, 1000);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Update error:', err);
       console.error('Error response:', err.response?.data);
 
@@ -407,6 +413,10 @@ const ProfileManagement: React.FC = () => {
           </button>
         </div>
       </form>
+
+      <div className="mt-6">
+        <AIConsentSettings />
+      </div>
     </div>
   );
 };

@@ -77,7 +77,7 @@ export interface QuizResponse {
   username: string;
   quiz: string;
   quiz_title: string;
-  responses: Record<string, any>;
+  responses: Record<string, unknown>;
   career_scores: Record<string, number>;
   recommended_career_path_id: string | null;
   recommended_career_path?: {

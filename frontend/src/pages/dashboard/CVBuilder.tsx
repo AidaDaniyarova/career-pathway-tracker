@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import ConfirmationModal from "../../components/ConfirmationModal";
-import { showToast } from "../../components/Toast";
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface CV {
   id: string;
@@ -24,18 +25,13 @@ const CVBuilder: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [cvToDelete, setCvToDelete] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchCVs();
-  }, []);
-
-  const fetchCVs = async () => {
+  const fetchCVs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get('/api/cv/cvs/', {
         headers: { Authorization: `Bearer ${token}` }
       });
-
 
       let cvsData = [];
       if (Array.isArray(response.data)) {
@@ -49,14 +45,23 @@ const CVBuilder: React.FC = () => {
       }
 
       setCvs(cvsData);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch CVs:', err);
       setError(err.response?.data?.message || 'Failed to load CVs');
       setCvs([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchCVs();
+    };
+    run();
+  }, [fetchCVs]);
 
   const createCV = async () => {
     if (!newTitle.trim()) {
@@ -88,7 +93,8 @@ const CVBuilder: React.FC = () => {
 
       showToast('CV created successfully!', 'success');
       navigate(`/dashboard/cv-builder/edit/${response.data.id}`);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create CV:', err);
       showToast(err.response?.data?.message || 'Failed to create CV', 'error');
     }
@@ -108,7 +114,7 @@ const CVBuilder: React.FC = () => {
       });
       fetchCVs();
       showToast('CV deleted successfully', 'success');
-    } catch (err) {
+    } catch {
       showToast('Failed to delete CV', 'error');
     } finally {
       setShowDeleteModal(false);
@@ -123,7 +129,8 @@ const CVBuilder: React.FC = () => {
       });
       fetchCVs();
       showToast('Default CV updated', 'success');
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to set default CV:', err);
       showToast(err.response?.data?.message || 'Failed to set default CV', 'error');
     }
@@ -136,7 +143,8 @@ const CVBuilder: React.FC = () => {
       });
       fetchCVs();
       showToast('CV duplicated successfully!', 'success');
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to duplicate CV:', err);
       showToast(err.response?.data?.message || 'Failed to duplicate CV', 'error');
     }

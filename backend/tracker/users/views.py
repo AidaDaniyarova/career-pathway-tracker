@@ -7,11 +7,16 @@ from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+from rest_framework.throttling import ScopedRateThrottle, AnonRateThrottle
+from django.conf import settings
 from django.contrib.auth import authenticate
 from users.models import User
 from .serializers import (UserSerializer, UserDetailSerializer, ChangePasswordSerializer,
                           UserProfileUpdateSerializer, UserProfileSerializer,
-                          UserAvatarSerializer, UserRegisterSerializer)
+                          UserAvatarSerializer, UserRegisterSerializer,
+                          PublicProfileSerializer, AIConsentSerializer)
 from progress.models import UserEnrollment, UserProgress
 from skills.models import UserSkill
 from ai.models import Recommendation
@@ -48,6 +53,8 @@ class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = [AllowAny]
     serializer_class = UserRegisterSerializer
+    throttle_classes = [AnonRateThrottle, ScopedRateThrottle]
+    throttle_scope = 'register'
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -71,6 +78,8 @@ class RegisterView(generics.CreateAPIView):
 class LoginView(APIView):
     """JWT Login View - returns access and refresh tokens using email"""
     permission_classes = [AllowAny]
+    throttle_classes = [AnonRateThrottle, ScopedRateThrottle]
+    throttle_scope = 'login'
 
     def post(self, request):
         email = request.data.get('email')
@@ -84,12 +93,7 @@ class LoginView(APIView):
         # Authenticate using email
         user = authenticate(request=request, username=email, password=password)
 
-        if user is not None:
-            if not user.is_active:
-                return Response({
-                    'error': 'This account is disabled'
-                }, status=status.HTTP_403_FORBIDDEN)
-
+        if user is not None and user.is_active:
             refresh = RefreshToken.for_user(user)
 
             return Response({
@@ -102,6 +106,10 @@ class LoginView(APIView):
                     'last_name': user.last_name,
                     'is_staff': user.is_staff,
                     'is_active': user.is_active,
+                    'ai_consent': user.ai_consent,
+                    'ai_consent_required': user.ai_consent is None or (
+                        bool(user.ai_consent) and user.ai_consent_version != settings.AI_CONSENT_VERSION
+                    ),
                 }
             }, status=status.HTTP_200_OK)
         else:
@@ -116,14 +124,17 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        try:
-            refresh_token = request.data.get('refresh')
-            if refresh_token:
+        refresh_token = request.data.get('refresh')
+        if refresh_token:
+            try:
                 token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                # Only allow users to revoke their own tokens
+                if str(token.get('user_id')) == str(request.user.id):
+                    token.blacklist()
+            except TokenError:
+                # Already expired/invalid - nothing to revoke
+                pass
+        return Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
 
 
 class ChangePasswordView(generics.UpdateAPIView):
@@ -142,7 +153,11 @@ class ChangePasswordView(generics.UpdateAPIView):
         user.set_password(serializer.validated_data['new_password'])
         user.save()
 
-        return Response({'message': 'Password changed successfully'})
+        # Revoke every existing refresh token so other sessions are logged out
+        for outstanding in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=outstanding)
+
+        return Response({'message': 'Password changed successfully. Please log in again.'})
 
 
 class ProfileView(generics.RetrieveUpdateAPIView):
@@ -440,11 +455,11 @@ class ProfileStatsView(generics.GenericAPIView):
 
 
 class PublicProfileView(generics.RetrieveAPIView):
-    """View for public user profiles (read-only)"""
+    """View for public user profiles (read-only, no private data such as email)"""
     permission_classes = [permissions.AllowAny]
-    serializer_class = UserProfileSerializer
-    lookup_field = 'username'
-    lookup_url_kwarg = 'username'
+    serializer_class = PublicProfileSerializer
+    lookup_field = 'id'
+    lookup_url_kwarg = 'user_id'
 
     def get_queryset(self):
         return User.objects.filter(is_active=True)
@@ -501,3 +516,36 @@ class ProfileManagementView(generics.RetrieveUpdateAPIView):
         ]
 
         return Response(data)
+
+
+class AIConsentView(APIView):
+    """
+    GET  -> current AI-usage consent state for the logged-in user
+    POST -> {"accepted": true|false} records the user's decision
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _payload(self, user):
+        return {
+            'ai_consent': user.ai_consent,
+            'ai_consent_at': user.ai_consent_at,
+            'ai_consent_version': user.ai_consent_version,
+            'current_version': settings.AI_CONSENT_VERSION,
+            'ai_consent_required': user.ai_consent is None or (
+                bool(user.ai_consent) and user.ai_consent_version != settings.AI_CONSENT_VERSION
+            ),
+        }
+
+    def get(self, request):
+        return Response(self._payload(request.user))
+
+    def post(self, request):
+        serializer = AIConsentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.ai_consent = serializer.validated_data['accepted']
+        user.ai_consent_at = timezone.now()
+        user.ai_consent_version = settings.AI_CONSENT_VERSION
+        user.save(update_fields=['ai_consent', 'ai_consent_at', 'ai_consent_version', 'updated_at'])
+        return Response(self._payload(user), status=status.HTTP_200_OK)

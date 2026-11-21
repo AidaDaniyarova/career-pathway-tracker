@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
+import type { ApiError } from '../../utils/errors';
 
 interface CV {
   id: string;
   user: string;
   username: string;
   title: string;
-  content?: any;
+  content?: Record<string, unknown> | null;
   ats_score: number;
   created_at: string;
 }
@@ -24,11 +25,7 @@ const CVsList: React.FC = () => {
     content: ''
   });
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -37,7 +34,8 @@ const CVsList: React.FC = () => {
         ? response.data
         : response.data.results || [];
       setItems(data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch CVs:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -47,14 +45,23 @@ const CVsList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchData();
+    };
+    run();
+  }, [fetchData]);
 
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this CV? This action cannot be undone.')) {
       try {
         await adminAPI.deleteCV(id);
         await fetchData();
-      } catch (err: any) {
+      } catch (caught) {
+        const err = caught as ApiError;
         console.error('Failed to delete CV:', err);
         alert(err.response?.data?.message || 'Failed to delete CV');
       }
@@ -87,7 +94,7 @@ const CVsList: React.FC = () => {
       if (formData.content.trim()) {
         try {
           contentData = JSON.parse(formData.content);
-        } catch (parseErr) {
+        } catch {
           setError('Invalid JSON format for CV content');
           setSubmitting(false);
           return;
@@ -103,7 +110,8 @@ const CVsList: React.FC = () => {
       setShowEditModal(false);
       setEditingItem(null);
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to update CV:', err);
       setError(err.response?.data?.message || 'Failed to update CV');
     } finally {

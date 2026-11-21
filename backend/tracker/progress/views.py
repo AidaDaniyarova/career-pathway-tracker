@@ -187,58 +187,6 @@ class UserEnrollmentViewSet(viewsets.ModelViewSet):
         enrollment.save(update_fields=['status'])
         return Response({'message': 'Career path dropped successfully', 'status': 'dropped'})
 
-    @action(detail=True, methods=['post'], url_path='edit-modules')
-    def edit_modules(self, request, pk=None):
-        career_path = self.get_object()
-        user = request.user
-        selected_module_ids = request.data.get('selected_modules', [])
-
-        if not user or not user.is_authenticated:
-            return Response(
-                {'error': 'Authentication required'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-
-        enrollment = UserEnrollment.objects.filter(
-            user=user,
-            career_path=career_path
-        ).first()
-
-        if not enrollment:
-            return Response(
-                {'error': 'You are not enrolled in this career path'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # TRUE SOURCE OF TRUTH: Query active user progress items, NOT static base tracks
-        user_progress_records = UserProgress.objects.filter(enrollment=enrollment).select_related('module')
-        selected_set = set(str(mid) for mid in selected_module_ids)
-
-        removed_count = 0
-
-        for progress in user_progress_records:
-            module_id_str = str(progress.module.id)
-
-            # If the user UNCHECKED this learning module item, process deletion
-            if module_id_str not in selected_set:
-                # Safety guard: Never remove structural core/mandatory requirements
-                if progress.module.is_required:
-                    continue
-
-                progress.delete()
-                removed_count += 1
-
-        # Run calculation update engine to shift metrics down instantly
-        enrollment.update_progress()
-
-        return Response({
-            'message': 'Learning path updated successfully',
-            'enrollment_id': str(enrollment.id),
-            'progress_percent': float(enrollment.progress_percent),
-            'status': enrollment.status,
-            'removed_count': removed_count
-        }, status=status.HTTP_200_OK)
-
 class UserProgressViewSet(viewsets.ModelViewSet):
     """ViewSet for tracking module progress"""
     serializer_class = UserProgressSerializer

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
+import { getErrorMessage, type ApiError } from '../../utils/errors';
 
 interface User {
   id: string;
@@ -43,11 +44,7 @@ const UsersList: React.FC = () => {
     is_active: true,
   });
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -59,7 +56,8 @@ const UsersList: React.FC = () => {
       // Handle both array response and paginated response
       const usersData = Array.isArray(response.data) ? response.data : response.data.results || [];
       setUsers(usersData);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to load users - Full error:', err);
       console.error('Error response:', err.response);
       console.error('Error message:', err.message);
@@ -74,7 +72,15 @@ const UsersList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchUsers();
+    };
+    run();
+  }, [fetchUsers]);
 
   const handleAddUser = async () => {
     // Validate form
@@ -122,14 +128,15 @@ const UsersList: React.FC = () => {
 
       // Refresh user list
       await fetchUsers();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create user:', err);
       const errorData = err.response?.data;
-      if (typeof errorData === 'object') {
+      if (errorData && typeof errorData === 'object') {
         const errors = Object.values(errorData).flat().join(', ');
         setFormError(errors || 'Failed to create user');
       } else {
-        setFormError(errorData?.message || 'Failed to create user');
+        setFormError(getErrorMessage(err, 'Failed to create user'));
       }
     } finally {
       setSubmitting(false);

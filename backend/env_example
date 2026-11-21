@@ -1,12 +1,20 @@
+# Copy to backend/.env for local (non-docker) development. Never commit .env.
+
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(64))"
 SECRET_KEY=
+# DEBUG defaults to False. Set True only on your own machine.
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1,testserver
 
-DB_NAME=
-DB_USER=
-DB_PASSWORD=
-DB_HOST=
-DB_PORT=5432
+# Database: either a single connection URL (Neon) ...
+# Get it with: neon connection-string --project-id <id> --pooled
+DATABASE_URL=
+# ... or individual settings (used when DATABASE_URL is empty)
+# DB_NAME=
+# DB_USER=
+# DB_PASSWORD=
+# DB_HOST=
+# DB_PORT=5432
 
-HUGGINGFACE_API_KEY=
 REDIS_URL=redis://localhost:6379
+HUGGINGFACE_API_KEY=

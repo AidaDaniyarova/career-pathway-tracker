@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface Module {
   id: string;
@@ -60,15 +61,11 @@ const CareerPathDetail: React.FC = () => {
   const token = localStorage.getItem('access_token');
   const isAuthenticated = !!token;
 
-  useEffect(() => {
-    fetchPathDetail();
-  }, [id]);
-
-  const fetchPathDetail = async () => {
+  const fetchPathDetail = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const config: any = {};
+      const config: { headers?: Record<string, string> } = {};
       if (token) {
         config.headers = { Authorization: `Bearer ${token}` };
       }
@@ -83,7 +80,8 @@ const CareerPathDetail: React.FC = () => {
         }
       });
       setSelectedModules(selected);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch career path:', err);
       if (err.response?.status === 404) {
         setError('Career path not found.');
@@ -93,7 +91,15 @@ const CareerPathDetail: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, token]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchPathDetail();
+    };
+    run();
+  }, [id, fetchPathDetail]);
 
   const handleEnroll = async () => {
     if (!token) {
@@ -153,7 +159,7 @@ const CareerPathDetail: React.FC = () => {
   }
 
   try {
-    const requestBody: any = {
+    const requestBody: Record<string, unknown> = {
       module_id: moduleId
     };
 
@@ -173,7 +179,8 @@ const CareerPathDetail: React.FC = () => {
         enrollment_id: response.data.enrollment_id || path?.enrollment_id
       }
     });
-  } catch (err: any) {
+  } catch (caught) {
+    const err = caught as ApiError;
       console.error('Failed to start module:', err);
       showToast('Failed to start module', 'error');
   }

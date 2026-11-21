@@ -1,0 +1,91 @@
+{% extends 'admin_dashboard/base_admin.html' %}
+
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-title">Total Users</div>
+        <div class="stat-value">{{ total_users }}</div>
+        <small>+{{ new_users_today }} today</small>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Active Users</div>
+        <div class="stat-value">{{ active_users }}</div>
+        <small>{{ active_users|floatformat:0 }}% of total</small>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Career Paths</div>
+        <div class="stat-value">{{ total_career_paths }}</div>
+        <small>{{ total_modules }} modules</small>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Enrollments</div>
+        <div class="stat-value">{{ total_enrollments }}</div>
+        <small>{{ completed_enrollments }} completed</small>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Avg Progress</div>
+        <div class="stat-value">{{ avg_progress|floatformat:0 }}%</div>
+        <small>across all enrollments</small>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Quiz Attempts</div>
+        <div class="stat-value">{{ total_quiz_attempts }}</div>
+        <small>Avg score: {{ avg_quiz_score|floatformat:0 }}%</small>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+    <div class="stat-card">
+        <h3>Recent Users</h3>
+        <table class="data-table" style="width: 100%; margin-top: 1rem;">
+            <thead>
+                <tr><th>Username</th><th>Email</th><th>Joined</th></tr>
+            </thead>
+            <tbody>
+                {% for user in recent_users %}
+                <tr>
+                    <td><a href="{% url 'admin_dashboard:user_detail' user.id %}">{{ user.username }}</a></td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ user.created_at|date:"Y-m-d" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="stat-card">
+        <h3>Popular Career Paths</h3>
+        <table class="data-table" style="width: 100%; margin-top: 1rem;">
+            <thead><tr><th>Title</th><th>Enrollments</th></tr></thead>
+            <tbody>
+                {% for path in popular_paths %}
+                <tr>
+                    <td><a href="{% url 'admin_dashboard:career_path_edit' path.id %}">{{ path.title }}</a></td>
+                    <td>{{ path.enrollment_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="stat-card" style="margin-top: 1.5rem;">
+    <h3>Recent Enrollments</h3>
+    <table class="data-table" style="width: 100%; margin-top: 1rem;">
+        <thead><tr><th>User</th><th>Career Path</th><th>Status</th><th>Progress</th><th>Started</th></tr></thead>
+        <tbody>
+            {% for enrollment in recent_enrollments %}
+            <tr>
+                <td><a href="{% url 'admin_dashboard:user_detail' enrollment.user.id %}">{{ enrollment.user.username }}</a></td>
+                <td><a href="{% url 'admin_dashboard:career_path_edit' enrollment.career_path.id %}">{{ enrollment.career_path.title }}</a></td>
+                <td><span class="badge badge-{{ enrollment.status }}">{{ enrollment.status }}</span></td>
+                <td>{{ enrollment.progress_percent|floatformat:0 }}%</td>
+                <td>{{ enrollment.started_at|date:"Y-m-d" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

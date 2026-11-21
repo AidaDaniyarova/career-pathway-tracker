@@ -57,6 +57,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     # XP and level tracking
     total_xp = models.IntegerField(default=0)
 
+    # AI-use consent (null = user has not answered yet)
+    ai_consent = models.BooleanField(null=True, blank=True, default=None)
+    ai_consent_at = models.DateTimeField(null=True, blank=True)
+    ai_consent_version = models.CharField(max_length=32, blank=True, default='')
+
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -95,6 +100,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def current_level(self):
         return (self.total_xp // 100) + 1
+
+    @property
+    def has_valid_ai_consent(self):
+        """True only if the user accepted the *current* version of the AI notice."""
+        from django.conf import settings
+        return bool(self.ai_consent) and self.ai_consent_version == settings.AI_CONSENT_VERSION
 
     def natural_key(self):
         return (self.email,)

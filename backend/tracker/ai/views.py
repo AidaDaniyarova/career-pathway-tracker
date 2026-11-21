@@ -9,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from .models import Recommendation, JobScan, InterviewAnswer
 from .services import AIRecommendationService, PersonalizedRecommendationService
 from .huggingface_service import huggingface_service
+from .permissions import AIViewMixin
 from cv.models import CV
 from learning.models import CareerPath
 from learning.models import LearningModule
@@ -17,9 +18,8 @@ from progress.models import UserEnrollment
 from quizzes.models import QuizResponse
 
 
-class CareerRecommendationsView(APIView):
+class CareerRecommendationsView(AIViewMixin, APIView):
     """Get AI-powered career recommendations"""
-    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         refresh = request.query_params.get('refresh', 'false').lower() == 'true'
@@ -215,9 +215,8 @@ class SkillGapAnalysisView(APIView):
         })
 
 
-class JobMatchView(APIView):
+class JobMatchView(AIViewMixin, APIView):
     """Analyze CV against job description using AI"""
-    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         cv_id = request.data.get('cv_id')
@@ -498,9 +497,8 @@ class JobScanHistoryView(APIView):
         return Response(result)
 
 
-class AIChatView(APIView):
+class AIChatView(AIViewMixin, APIView):
     """AI Chat endpoint using Hugging Face"""
-    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         message = request.data.get('message', '')
@@ -531,9 +529,8 @@ class AIChatView(APIView):
         })
 
 
-class JobDescriptionSummarizeView(APIView):
+class JobDescriptionSummarizeView(AIViewMixin, APIView):
     """Summarize job description using Hugging Face"""
-    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         job_description = request.data.get('job_description', '')
@@ -553,9 +550,8 @@ class JobDescriptionSummarizeView(APIView):
         })
 
 
-class InterviewQuestionsView(APIView):
+class InterviewQuestionsView(AIViewMixin, APIView):
     """Generate interview questions using Hugging Face"""
-    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         job_title = request.data.get('job_title', '')

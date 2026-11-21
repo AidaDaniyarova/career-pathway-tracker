@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 import { progressAPI } from '../../services/api';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface Enrollment {
   id: string;
@@ -35,11 +36,18 @@ interface Module {
 
 interface DashboardData {
   enrollments: Enrollment[];
-  statistics: any;
-  in_progress_modules: any[];
-  recent_activity: any[];
-  top_skills: any[];
-  recommendations: any[];
+  statistics: {
+    total_xp?: number;
+    level?: number;
+    current_streak?: number;
+    completed_modules?: number;
+    total_enrollments?: number;
+    total_time_spent?: { hours?: number };
+  };
+  in_progress_modules: unknown[];
+  recent_activity: unknown[];
+  top_skills: unknown[];
+  recommendations: unknown[];
   weekly_activity: { day: string; completions: number }[];
 }
 
@@ -65,20 +73,7 @@ const ProgressDashboard: React.FC = () => {
   const [addingModule, setAddingModule] = useState(false);
   const [loadingModules, setLoadingModules] = useState(false);
 
-  useEffect(() => {
-  if (isAuthenticated) {
-    fetchDashboardData();
-
-    // Check if we need to refresh from module completion
-    if (sessionStorage.getItem('shouldRefreshDashboard')) {
-      sessionStorage.removeItem('shouldRefreshDashboard');
-      // Force refresh
-      fetchDashboardData();
-    }
-  }
-}, [isAuthenticated]);
-
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
     try {
       const response = await progressAPI.getDashboard();
       setData(response.data);
@@ -87,7 +82,24 @@ const ProgressDashboard: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+    if (isAuthenticated) {
+      fetchDashboardData();
+
+      // Check if we need to refresh from module completion
+      if (sessionStorage.getItem('shouldRefreshDashboard')) {
+        sessionStorage.removeItem('shouldRefreshDashboard');
+        // Force refresh
+        fetchDashboardData();
+      }
+    }
+    };
+    run();
+  }, [isAuthenticated, fetchDashboardData]);
 
   const fetchPathModules = async (careerPathId: string) => {
     try {
@@ -98,7 +110,7 @@ const ProgressDashboard: React.FC = () => {
 
       const modulesData = response.data.selected_modules || [];
 
-      const normalizedModules = modulesData.map((m: any) => ({
+      const normalizedModules = modulesData.map((m: Partial<Module> & { status?: string }) => ({
         id: m.id,
         title: m.title,
         description: m.description || 'Custom learning module',
@@ -241,7 +253,8 @@ const ProgressDashboard: React.FC = () => {
 
     showToast(response.data.message, 'success');
     setShowAddModal(false);
-  } catch (err: any) {
+  } catch (caught) {
+    const err = caught as ApiError;
     console.error('Failed to add module:', err);
     showToast(err.response?.data?.error || 'Failed to add module', 'error');
   } finally {
@@ -270,7 +283,8 @@ const ProgressDashboard: React.FC = () => {
         sessionStorage.setItem('current_enrollment_id', enrollmentId);
         sessionStorage.setItem('current_module_id', moduleId);
 
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
         console.error('Failed to start module:', err);
         showToast(err.response?.data?.error || 'Failed to start module', 'error');
     } finally {

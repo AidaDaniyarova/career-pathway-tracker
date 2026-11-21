@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { quizAPI } from '../../services/api';
 
@@ -20,11 +20,7 @@ const QuizTake: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    startQuiz();
-  }, [id]);
-
-  const startQuiz = async () => {
+  const startQuiz = useCallback(async () => {
     try {
       const response = await quizAPI.start(id!);
       setAttemptId(response.data.attempt_id);
@@ -35,7 +31,15 @@ const QuizTake: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, navigate]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      startQuiz();
+    };
+    run();
+  }, [id, startQuiz]);
 
   const handleAnswer = (questionId: string, answer: string) => {
     setAnswers(prev => ({ ...prev, [questionId]: answer }));

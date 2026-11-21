@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { showToast } from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface Question {
   id: string;
@@ -54,13 +55,9 @@ const QuizEngine: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [previousResults, setPreviousResults] = useState<any>(null);
+  const [previousResults, setPreviousResults] = useState<{ completed_at: string } | null>(null);
 
-  useEffect(() => {
-    fetchQuiz();
-  }, []);
-
-  const fetchQuiz = async () => {
+  const fetchQuiz = useCallback(async () => {
     try {
       const token = localStorage.getItem('access_token');
       if (!token) {
@@ -72,7 +69,8 @@ const QuizEngine: React.FC = () => {
       const response = await api.get('/quizzes/start/');
       setQuiz(response.data.quiz);
       setPreviousResults(response.data.previous_results);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch quiz:', err);
       if (err.response?.status === 401) {
         showToast('Please log in to take the quiz', 'error');
@@ -83,7 +81,15 @@ const QuizEngine: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchQuiz();
+    };
+    run();
+  }, [fetchQuiz]);
 
   const handleAnswer = (questionId: string, optionId: string) => {
     setAnswers(prev => ({ ...prev, [questionId]: optionId }));
@@ -126,7 +132,8 @@ const QuizEngine: React.FC = () => {
       localStorage.setItem('quiz_completed', 'true');
       localStorage.setItem('quiz_career_scores', JSON.stringify(response.data.career_scores));
 
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to submit quiz:', err);
       showToast(err.response?.data?.error || 'Failed to submit quiz. Please try again.', 'error');
     } finally {

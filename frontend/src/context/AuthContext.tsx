@@ -1,32 +1,15 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authAPI } from '../services/api';
-
-interface User {
-  id: string;
-  email: string;
-  first_name: string;
-  last_name: string;
-  is_staff: boolean;
-  total_xp?: number;
-  current_level?: number;
-}
-
-interface AuthContextType {
-  user: User | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: any) => Promise<void>;
-  logout: () => void;
-  updateProfile: (data: any) => Promise<void>;
-  isAdmin: boolean;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+import React, { useState, useEffect, useCallback } from 'react';
+import { authAPI, clearStoredAuth, type Payload, type RegisterPayload } from '../services/api';
+import { AuthContext, type AuthUser } from './auth';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const storeUser = (u: AuthUser) => {
+    setUser(u);
+    localStorage.setItem('user', JSON.stringify(u));
+  };
 
   useEffect(() => {
     const loadUser = async () => {
@@ -34,12 +17,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (token) {
         try {
           const response = await authAPI.getProfile();
-          setUser(response.data);
-          localStorage.setItem('user', JSON.stringify(response.data));
-        } catch (error) {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          localStorage.removeItem('user');
+          storeUser(response.data);
+        } catch {
+          clearStoredAuth();
         }
       }
       setIsLoading(false);
@@ -47,47 +27,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadUser();
   }, []);
 
+  const saveSession = (data: { access: string; refresh: string; user: AuthUser }) => {
+    localStorage.setItem('access_token', data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+    storeUser(data.user);
+  };
+
   const login = async (email: string, password: string) => {
     const response = await authAPI.login(email, password);
-    localStorage.setItem('access_token', response.data.access);
-    localStorage.setItem('refresh_token', response.data.refresh);
-    localStorage.setItem('user', JSON.stringify(response.data.user));
-    setUser(response.data.user);
+    saveSession(response.data);
   };
 
-  const register = async (data: any) => {
+  const register = async (data: RegisterPayload) => {
     const response = await authAPI.register(data);
-    localStorage.setItem('access_token', response.data.access);
-    localStorage.setItem('refresh_token', response.data.refresh);
-    localStorage.setItem('user', JSON.stringify(response.data.user));
-    setUser(response.data.user);
+    // New accounts have not answered the AI notice yet
+    saveSession({ ...response.data, user: { ...response.data.user, ai_consent: null, ai_consent_required: true } });
   };
 
-  const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('user');
+  const logout = async () => {
+    const refresh = localStorage.getItem('refresh_token');
+    try {
+      // Revoke the refresh token server-side so it cannot be reused
+      if (refresh) await authAPI.logout(refresh);
+    } catch {
+      // Ignore network/expired-token errors; local session is cleared regardless
+    }
+    clearStoredAuth();
     setUser(null);
   };
 
-  const updateProfile = async (data: any) => {
+  const updateProfile = async (data: Payload) => {
     const response = await authAPI.updateProfile(data);
-    setUser(response.data);
-    localStorage.setItem('user', JSON.stringify(response.data));
+    setUser((prev) => {
+      const next = { ...(prev as AuthUser), ...response.data };
+      localStorage.setItem('user', JSON.stringify(next));
+      return next;
+    });
   };
+
+  const setAIConsent = useCallback(async (accepted: boolean) => {
+    const response = await authAPI.setAIConsent(accepted);
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = {
+        ...prev,
+        ai_consent: response.data.ai_consent,
+        ai_consent_required: response.data.ai_consent_required,
+      };
+      localStorage.setItem('user', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const isAdmin = user?.is_staff || false;
   const isAuthenticated = !!user;
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated, login, register, logout, updateProfile, isAdmin }}>
+    <AuthContext.Provider
+      value={{ user, isLoading, isAuthenticated, login, register, logout, updateProfile, setAIConsent, isAdmin }}
+    >
       {children}
     </AuthContext.Provider>
   );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
-  return context;
 };

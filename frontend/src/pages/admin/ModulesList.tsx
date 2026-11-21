@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { adminAPI } from '../../services/api';
 import type { LearningModule } from '../../types';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
 import axios from "axios";
+import type { ApiError } from '../../utils/errors';
 
 const ModulesList: React.FC = () => {
   const [items, setItems] = useState<LearningModule[]>([]);
@@ -39,11 +40,7 @@ const ModulesList: React.FC = () => {
     { value: 'advanced', label: 'Advanced' }
   ];
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -52,7 +49,8 @@ const ModulesList: React.FC = () => {
         ? response.data
         : response.data.results || [];
       setItems(data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch modules:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -62,7 +60,15 @@ const ModulesList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchData();
+    };
+    run();
+  }, [fetchData]);
 
   const handleScrape = async () => {
   setScraping(true);
@@ -76,7 +82,8 @@ const ModulesList: React.FC = () => {
     );
     showToast(`Scraped ${response.data.result.created} new courses!`, 'success');
     fetchData();
-  } catch (err: any) {
+  } catch (caught) {
+    const err = caught as ApiError;
     console.error('Scrape error:', err);
     showToast(err.response?.data?.error || 'Scraping failed', 'error');
   } finally {
@@ -116,7 +123,8 @@ const ModulesList: React.FC = () => {
       setEditingItem(null);
       resetForm();
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to save module:', err);
       if (err.response?.data?.title) {
         setError(`Title issue: ${err.response.data.title}`);
@@ -148,7 +156,8 @@ const ModulesList: React.FC = () => {
       try {
         await adminAPI.deleteModule(id);
         await fetchData();
-      } catch (err: any) {
+      } catch (caught) {
+        const err = caught as ApiError;
         console.error('Failed to delete module:', err);
         alert(err.response?.data?.message || 'Failed to delete module');
       }

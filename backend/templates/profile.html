@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>My Profile</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>Profile Information</h2>
+        <div id="profileInfo">Loading...</div>
+        
+        <button onclick="toggleEdit()" class="btn" id="editBtn">Edit Profile</button>
+        
+        <form id="editForm" style="display: none; margin-top: 20px;">
+            {% csrf_token %}
+            <div class="form-group">
+                <label>First Name</label>
+                <input type="text" id="edit_first_name">
+            </div>
+            <div class="form-group">
+                <label>Last Name</label>
+                <input type="text" id="edit_last_name">
+            </div>
+            <div class="form-group">
+                <label>Education Level</label>
+                <select id="edit_education_level">
+                    <option value="">Select...</option>
+                    <option value="high_school">High School</option>
+                    <option value="associate">Associate Degree</option>
+                    <option value="bachelor">Bachelor's Degree</option>
+                    <option value="master">Master's Degree</option>
+                    <option value="phd">PhD</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Years of Experience</label>
+                <input type="number" id="edit_years_experience">
+            </div>
+            <button type="submit" class="btn btn-success">Save Changes</button>
+            <button type="button" onclick="toggleEdit()" class="btn btn-danger">Cancel</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h2>My Stats</h2>
+        <div id="statsInfo">Loading...</div>
+    </div>
+</div>
+
+<script>
+    const token = localStorage.getItem('token');
+    let currentUser = null;
+    
+    async function loadProfile() {
+        try {
+            const response = await fetch('/api/users/profile/', {
+                headers: { 'Authorization': `Token ${token}` }
+            });
+            const data = await response.json();
+            currentUser = data;
+            displayProfile(data);
+            displayStats(data.stats);
+        } catch (error) {
+            document.getElementById('profileInfo').innerHTML = '<div class="alert alert-error">Error loading profile</div>';
+        }
+    }
+    
+    function displayProfile(user) {
+        document.getElementById('profileInfo').innerHTML = `
+            <p><strong>Username:</strong> ${user.username}</p>
+            <p><strong>Email:</strong> ${user.email}</p>
+            <p><strong>Name:</strong> ${user.full_name || 'Not set'}</p>
+            <p><strong>Education:</strong> ${user.education_level || 'Not specified'}</p>
+            <p><strong>Experience:</strong> ${user.years_experience || 0} years</p>
+            <p><strong>Member Since:</strong> ${formatDate(user.created_at)}</p>
+        `;
+        
+        // Populate edit form
+        document.getElementById('edit_first_name').value = user.first_name || '';
+        document.getElementById('edit_last_name').value = user.last_name || '';
+        document.getElementById('edit_education_level').value = user.education_level || '';
+        document.getElementById('edit_years_experience').value = user.years_experience || 0;
+    }
+    
+    function displayStats(stats) {
+        if (!stats) {
+            document.getElementById('statsInfo').innerHTML = '<p>No stats available</p>';
+            return;
+        }
+        
+        document.getElementById('statsInfo').innerHTML = `
+            <p><strong>Total XP:</strong> ${stats.xp?.total || 0}</p>
+            <p><strong>Level:</strong> ${stats.xp?.level || 1}</p>
+            <p><strong>Completed Modules:</strong> ${stats.modules?.completed || 0}</p>
+            <p><strong>Completed Paths:</strong> ${stats.enrollments?.completed || 0}</p>
+            <p><strong>Average Quiz Score:</strong> ${stats.quizzes?.average_score || 0}%</p>
+            <p><strong>Skills:</strong> ${stats.skills?.total || 0} (Avg Level: ${stats.skills?.average_level || 0})</p>
+            <p><strong>Learning Streak:</strong> ${stats.streak?.current || 0} days</p>
+            <p><strong>Total Time Spent:</strong> ${stats.time_spent?.display || '0h'}</p>
+        `;
+    }
+    
+    function toggleEdit() {
+        const editForm = document.getElementById('editForm');
+        const editBtn = document.getElementById('editBtn');
+        
+        if (editForm.style.display === 'none') {
+            editForm.style.display = 'block';
+            editBtn.style.display = 'none';
+        } else {
+            editForm.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+        }
+    }
+    
+    document.getElementById('editForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const data = {
+            first_name: document.getElementById('edit_first_name').value,
+            last_name: document.getElementById('edit_last_name').value,
+            education_level: document.getElementById('edit_education_level').value,
+            years_experience: parseInt(document.getElementById('edit_years_experience').value) || 0
+        };
+        
+        try {
+            const response = await fetch('/api/users/profile/', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Token ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                alert('Profile updated successfully!');
+                toggleEdit();
+                loadProfile();
+            } else {
+                const error = await response.json();
+                alert('Failed to update profile: ' + JSON.stringify(error));
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    });
+    
+    if (!token) {
+        window.location.href = '/api/login/';
+    } else {
+        loadProfile();
+    }
+</script>
+{% endblock %}

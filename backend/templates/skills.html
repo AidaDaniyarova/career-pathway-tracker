@@ -1,0 +1,173 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>Skills</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>All Skills</h2>
+        <div id="allSkillsList">Loading...</div>
+    </div>
+    
+    {% if user.is_authenticated %}
+    <div class="card">
+        <h2>My Skills</h2>
+        <div id="mySkillsList">Loading...</div>
+        
+        <h3 style="margin-top: 20px;">Add New Skill</h3>
+        <form id="addSkillForm">
+            {% csrf_token %}
+            <div class="form-group">
+                <select id="skillSelect" required>
+                    <option value="">Select a skill...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Proficiency Level (1-5)</label>
+                <input type="range" id="skillLevel" min="1" max="5" value="3" oninput="levelValue.value = this.value">
+                <output id="levelValue">3</output>
+            </div>
+            <button type="submit" class="btn">Add Skill</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+    const token = localStorage.getItem('token');
+    
+    async function loadAllSkills() {
+        try {
+            const response = await fetch('/api/skills/skills/');
+            const data = await response.json();
+            
+            if (data.results) {
+                displayAllSkills(data.results);
+                populateSkillSelect(data.results);
+            } else if (Array.isArray(data)) {
+                displayAllSkills(data);
+                populateSkillSelect(data);
+            }
+        } catch (error) {
+            document.getElementById('allSkillsList').innerHTML = '<div class="alert alert-error">Error loading skills</div>';
+        }
+    }
+    
+    function displayAllSkills(skills) {
+        if (skills.length === 0) {
+            document.getElementById('allSkillsList').innerHTML = '<p>No skills available.</p>';
+            return;
+        }
+        
+        document.getElementById('allSkillsList').innerHTML = `
+            <div style="display: flex; flex-wrap: wrap;">
+                ${skills.map(skill => `<span class="skill-badge">${skill.name}</span>`).join('')}
+            </div>
+        `;
+    }
+    
+    function populateSkillSelect(skills) {
+        const select = document.getElementById('skillSelect');
+        if (select) {
+            select.innerHTML = '<option value="">Select a skill...</option>' + 
+                skills.map(skill => `<option value="${skill.id}">${skill.name}</option>`).join('');
+        }
+    }
+    
+    async function loadMySkills() {
+        if (!token) return;
+        
+        try {
+            const response = await fetch('/api/skills/user-skills/', {
+                headers: { 'Authorization': `Token ${token}` }
+            });
+            const data = await response.json();
+            
+            if (data.results) {
+                displayMySkills(data.results);
+            } else if (Array.isArray(data)) {
+                displayMySkills(data);
+            }
+        } catch (error) {
+            document.getElementById('mySkillsList').innerHTML = '<div class="alert alert-error">Error loading your skills</div>';
+        }
+    }
+    
+    function displayMySkills(skills) {
+        if (skills.length === 0) {
+            document.getElementById('mySkillsList').innerHTML = '<p>You haven\'t added any skills yet.</p>';
+            return;
+        }
+        
+        document.getElementById('mySkillsList').innerHTML = skills.map(skill => `
+            <div style="border-bottom: 1px solid #e2e8f0; padding: 10px 0;">
+                <strong>${skill.skill_name}</strong>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${skill.level * 20}%; background: #ed8936;"></div>
+                </div>
+                <small>Level ${skill.level}/5</small>
+                <button onclick="removeSkill('${skill.id}')" class="btn btn-danger" style="margin-top: 5px; padding: 3px 10px;">Remove</button>
+            </div>
+        `).join('');
+    }
+    
+    async function removeSkill(userSkillId) {
+        if (!confirm('Remove this skill?')) return;
+        
+        try {
+            const response = await fetch(`/api/skills/user-skills/${userSkillId}/`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Token ${token}` }
+            });
+            
+            if (response.ok) {
+                loadMySkills();
+            } else {
+                alert('Failed to remove skill');
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    }
+    
+    if (document.getElementById('addSkillForm')) {
+        document.getElementById('addSkillForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const skillId = document.getElementById('skillSelect').value;
+            const level = document.getElementById('skillLevel').value;
+            
+            if (!skillId) {
+                alert('Please select a skill');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/skills/user-skills/', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Token ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ skill: skillId, level: parseInt(level) })
+                });
+                
+                if (response.ok) {
+                    loadMySkills();
+                    document.getElementById('addSkillForm').reset();
+                    document.getElementById('skillLevel').value = 3;
+                    document.getElementById('levelValue').value = 3;
+                } else {
+                    const error = await response.json();
+                    alert('Failed to add skill: ' + JSON.stringify(error));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        });
+    }
+    
+    loadAllSkills();
+    if (token) loadMySkills();
+</script>
+{% endblock %}

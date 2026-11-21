@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import axios from 'axios';
-import { showToast } from '../../components/Toast';
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface ScrapeResult {
   created: number;
@@ -30,11 +31,7 @@ const ScrapeCourses: React.FC = () => {
   const [loadingPaths, setLoadingPaths] = useState(false);
   const token = localStorage.getItem('access_token');
 
-  React.useEffect(() => {
-    fetchCareerPaths();
-  }, []);
-
-  const fetchCareerPaths = async () => {
+  const fetchCareerPaths = useCallback(async () => {
     setLoadingPaths(true);
     try {
       const response = await axios.get('/api/learning/career-paths/', {
@@ -46,7 +43,15 @@ const ScrapeCourses: React.FC = () => {
     } finally {
       setLoadingPaths(false);
     }
-  };
+  }, [token]);
+
+  React.useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchCareerPaths();
+    };
+    run();
+  }, [fetchCareerPaths]);
 
   const addSearchTerm = () => {
     if (newTerm.trim() && !searchTerms.includes(newTerm.trim())) {
@@ -80,7 +85,8 @@ const ScrapeCourses: React.FC = () => {
 
     setResult(response.data.result);
     showToast(`Successfully scraped ${response.data.result.created} new courses!`, 'success');
-  } catch (err: any) {
+  } catch (caught) {
+    const err = caught as ApiError;
     console.error('Scraping failed:', err);
     showToast(err.response?.data?.error || 'Scraping failed', 'error');
   } finally {
@@ -97,7 +103,7 @@ const scrapeForCareerPath = async (careerPathId: string, careerPathTitle: string
     );
     showToast(`Scraped ${response.data.result.created} courses for ${careerPathTitle}`, 'success');
     setResult(response.data.result);
-  } catch (err) {
+  } catch {
     showToast(`Failed to scrape for ${careerPathTitle}`, 'error');
   } finally {
     setScraping(false);

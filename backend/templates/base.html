@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Career Pathway Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .nav-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            transition: color 0.3s;
+            padding: 5px 10px;
+        }
+
+        .nav-links a:hover {
+            color: #667eea;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .username {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #5a67d8;
+        }
+
+        .btn-danger {
+            background: #e53e3e;
+        }
+
+        .btn-danger:hover {
+            background: #c53030;
+        }
+
+        .btn-success {
+            background: #48bb78;
+        }
+
+        .btn-success:hover {
+            background: #38a169;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .skill-badge {
+            display: inline-block;
+            background: #e2e8f0;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            margin: 5px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #48bb78;
+            transition: width 0.3s;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #fc8181;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        h1, h2, h3 {
+            margin-bottom: 1rem;
+            color: #2d3748;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #718096;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-completed { background: #c6f6d5; color: #22543d; }
+        .status-progress { background: #feebc8; color: #7c2d12; }
+        .status-enrolled { background: #bee3f8; color: #2c5282; }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo">Career Pathway Tracker</div>
+        <div class="nav-links">
+            <a href="/">Home</a>
+
+            <div id="authenticatedLinks" style="display: none;">
+                <a href="/api/progress/dashboard/">Dashboard</a>
+                <a href="/career-paths/">Career Paths</a>
+                <a href="/skills/">Skills</a>
+                <a href="/profile/">Profile</a>
+            </div>
+
+            <div id="unauthenticatedLinks" style="display: block;">
+                <a href="/login/">Login</a>
+                <a href="/register/">Register</a>
+            </div>
+
+            <div id="userInfo" class="user-info" style="display: none;">
+                <span class="username" id="usernameDisplay"></span>
+                <button id="logoutBtn" class="btn btn-danger" style="padding: 5px 15px;">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div id="messageContainer"></div>
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+        // API Configuration - ALL API calls go to /api/users/
+        const API_BASE_URL = '/api/users';
+
+        function getAccessToken() {
+            return localStorage.getItem('access_token');
+        }
+
+        function getRefreshToken() {
+            return localStorage.getItem('refresh_token');
+        }
+
+        function getUserData() {
+            const userStr = localStorage.getItem('user');
+            if (userStr) {
+                try {
+                    return JSON.parse(userStr);
+                } catch (e) {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        function isAuthenticated() {
+            return !!getAccessToken();
+        }
+
+        function showMessage(message, type = 'success') {
+            const container = document.getElementById('messageContainer');
+            if (container) {
+                container.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+                setTimeout(() => {
+                    container.innerHTML = '';
+                }, 5000);
+            }
+        }
+
+        function updateNavbar() {
+            const authenticatedLinks = document.getElementById('authenticatedLinks');
+            const unauthenticatedLinks = document.getElementById('unauthenticatedLinks');
+            const userInfo = document.getElementById('userInfo');
+            const usernameDisplay = document.getElementById('usernameDisplay');
+
+            if (isAuthenticated()) {
+                const user = getUserData();
+                if (authenticatedLinks) authenticatedLinks.style.display = 'block';
+                if (unauthenticatedLinks) unauthenticatedLinks.style.display = 'none';
+                if (userInfo) userInfo.style.display = 'flex';
+                if (usernameDisplay && user) {
+                    usernameDisplay.textContent = user.username || user.email || 'User';
+                }
+            } else {
+                if (authenticatedLinks) authenticatedLinks.style.display = 'none';
+                if (unauthenticatedLinks) unauthenticatedLinks.style.display = 'block';
+                if (userInfo) userInfo.style.display = 'none';
+            }
+        }
+
+        async function logout() {
+            const refreshToken = getRefreshToken();
+            const accessToken = getAccessToken();
+
+            try {
+                await fetch(API_BASE_URL + '/logout/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${accessToken}`
+                    },
+                    body: JSON.stringify({ refresh: refreshToken })
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user');
+            updateNavbar();
+            window.location.href = '/login/';
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            updateNavbar();
+
+            const logoutBtn = document.getElementById('logoutBtn');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', logout);
+            }
+        });
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
