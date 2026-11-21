@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 import { progressAPI } from '../../services/api';
+import GettingStartedChecklist from '../../components/onboarding/GettingStartedChecklist';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface Enrollment {
@@ -89,15 +90,7 @@ const DashboardHome: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetchDashboardData();
-    } else {
-      setLoading(false);
-    }
-  }, [isAuthenticated]);
-
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
     try {
       const response = await progressAPI.getDashboard();
       setData(response.data);
@@ -107,7 +100,19 @@ const DashboardHome: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      if (isAuthenticated) {
+        fetchDashboardData();
+      } else {
+        setLoading(false);
+      }
+    };
+    run();
+  }, [isAuthenticated, fetchDashboardData]);
 
   if (loading) {
     return (
@@ -168,6 +173,8 @@ const DashboardHome: React.FC = () => {
     return <div className="text-center py-8">No dashboard data available.</div>;
   }
 
+  const isNewLearner = !data.statistics.total_xp && !data.statistics.total_enrollments;
+
   // Prepare chart data - ensure it's always an array
   const weeklyData = data.weekly_activity || [];
 
@@ -175,9 +182,18 @@ const DashboardHome: React.FC = () => {
     <div className="space-y-6">
       {/* Welcome Section */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl p-6 text-white">
-        <h1 className="text-2xl font-bold mb-2">Welcome back, {user?.first_name}! 👋</h1>
-        <p className="opacity-90">Continue your learning journey and track your progress.</p>
+        <h1 className="text-2xl font-bold mb-2">
+          {isNewLearner ? 'Welcome' : 'Welcome back'}, {user?.first_name}! 👋
+        </h1>
+        <p className="opacity-90">
+          {isNewLearner
+            ? 'Start with the first steps below, or explore on your own.'
+            : 'Continue your learning journey and track your progress.'}
+        </p>
       </div>
+
+      {/* Optional first steps for new users */}
+      <GettingStartedChecklist />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -212,12 +228,12 @@ const DashboardHome: React.FC = () => {
         <h3 className="font-semibold text-gray-800 mb-4">🎯 Learning Progress</h3>
         <div className="flex items-center gap-6 flex-wrap">
           <div className="text-center">
-            <div className="text-4xl font-bold text-blue-600">{data.statistics.completion_rate}%</div>
+            <div className="text-4xl font-bold text-blue-600">{data.statistics.completion_rate ?? 0}%</div>
             <div className="text-sm text-gray-500">Completion Rate</div>
           </div>
           <div className="flex-1 min-w-[200px]">
             <div className="w-full bg-gray-200 rounded-full h-3">
-              <div className="bg-blue-600 h-3 rounded-full" style={{ width: `${data.statistics.completion_rate}%` }} />
+              <div className="bg-blue-600 h-3 rounded-full" style={{ width: `${data.statistics.completion_rate ?? 0}%` }} />
             </div>
           </div>
           <div className="flex-1">

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 import type { Skill } from '../../types';
+import type { ApiError } from '../../utils/errors';
 
 const SkillsList: React.FC = () => {
   const [items, setItems] = useState<Skill[]>([]);
@@ -11,11 +12,7 @@ const SkillsList: React.FC = () => {
   const [skillName, setSkillName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -24,7 +21,8 @@ const SkillsList: React.FC = () => {
         ? response.data
         : response.data.results || [];
       setItems(data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch skills:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -36,7 +34,15 @@ const SkillsList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchData();
+    };
+    run();
+  }, [fetchData]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +58,8 @@ const SkillsList: React.FC = () => {
       setSkillName('');
       setShowModal(false);
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create skill:', err);
       if (err.response?.status === 400 && err.response?.data?.name) {
         setError(err.response.data.name);
@@ -79,7 +86,8 @@ const SkillsList: React.FC = () => {
       setShowModal(false);
       setEditingItem(null);
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to update skill:', err);
       if (err.response?.status === 400 && err.response?.data?.name) {
         setError(err.response.data.name);
@@ -103,7 +111,8 @@ const SkillsList: React.FC = () => {
       try {
         await adminAPI.deleteSkill(id);
         await fetchData();
-      } catch (err: any) {
+      } catch (caught) {
+        const err = caught as ApiError;
         console.error('Failed to delete skill:', err);
         alert(err.response?.data?.message || 'Failed to delete skill');
       }

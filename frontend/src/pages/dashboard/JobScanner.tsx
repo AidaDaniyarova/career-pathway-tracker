@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../context/AuthContext';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../../context/auth';
 import { aiAPI, cvAPI } from '../../services/api';
 import axios from 'axios';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import AIDisclaimer from '../../components/AIDisclaimer';
+import type { ApiError } from '../../utils/errors';
 
 interface ScanResult {
   scan_id: string;
@@ -37,9 +39,15 @@ interface ScanDetail extends ScanHistory {
   recommendations: string[];
 }
 
+interface CVSummary {
+  id: string;
+  title: string;
+  is_default?: boolean;
+}
+
 const JobScanner: React.FC = () => {
   const { isAuthenticated } = useAuth();
-  const [cvs, setCvs] = useState<any[]>([]);
+  const [cvs, setCvs] = useState<CVSummary[]>([]);
   const [selectedCV, setSelectedCV] = useState('');
   const [jobTitle, setJobTitle] = useState('');
   const [company, setCompany] = useState('');
@@ -50,14 +58,7 @@ const JobScanner: React.FC = () => {
   const [selectedScan, setSelectedScan] = useState<ScanDetail | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetchCVs();
-      fetchScanHistory();
-    }
-  }, [isAuthenticated]);
-
-  const fetchCVs = async () => {
+  const fetchCVs = useCallback(async () => {
     try {
       const response = await cvAPI.getUserCVs();
       let cvsData = [];
@@ -70,22 +71,33 @@ const JobScanner: React.FC = () => {
       }
       setCvs(cvsData);
       if (cvsData.length > 0) {
-        const defaultCV = cvsData.find((cv: any) => cv.is_default);
+        const defaultCV = cvsData.find((cv: CVSummary) => cv.is_default);
         setSelectedCV(defaultCV?.id || cvsData[0].id);
       }
     } catch (err) {
       console.error('Failed to fetch CVs:', err);
     }
-  };
+  }, []);
 
-  const fetchScanHistory = async () => {
+  const fetchScanHistory = useCallback(async () => {
     try {
       const response = await aiAPI.getJobScanHistory();
       setScanHistory(response.data);
     } catch (err) {
       console.error('Failed to fetch scan history:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      if (isAuthenticated) {
+        fetchCVs();
+        fetchScanHistory();
+      }
+    };
+    run();
+  }, [isAuthenticated, fetchCVs, fetchScanHistory]);
 
   const fetchScanDetail = async (scanId: string) => {
     try {
@@ -122,7 +134,8 @@ const JobScanner: React.FC = () => {
       );
       setResult(response.data);
       fetchScanHistory();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to scan:', err);
       showToast('Failed to analyze job match', 'error');
     } finally {
@@ -137,6 +150,8 @@ const JobScanner: React.FC = () => {
     return 'text-red-600';
   };
   return (
+    <>
+    <AIDisclaimer feature="Match scores and suggestions" />
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       {/* Left Panel - Input */}
       <div className="space-y-6">
@@ -287,8 +302,6 @@ const JobScanner: React.FC = () => {
                 </div>
               </div>
             )}
-
-
 
             {/* Matched Skills */}
             {result.matched_skills && result.matched_skills.length > 0 && (
@@ -461,6 +474,7 @@ const JobScanner: React.FC = () => {
         </div>
       )}
     </div>
+    </>
   );
 };
 

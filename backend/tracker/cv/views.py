@@ -5,6 +5,8 @@ from rest_framework.parsers import MultiPartParser, JSONParser
 from django.http import HttpResponse
 from .models import CV, CVTemplate
 from .serializers import CVSerializer, CVDetailSerializer, CVTemplateSerializer
+from rest_framework.throttling import ScopedRateThrottle, UserRateThrottle
+from ai.permissions import HasAIConsent
 from .services import ATSScanner, CVExportService
 
 
@@ -19,6 +21,7 @@ class CVViewSet(viewsets.ModelViewSet):
     serializer_class = CVSerializer
     lookup_field = 'id'
     parser_classes = [MultiPartParser, JSONParser]
+    throttle_scope = 'ai'  # only used by actions that enable ScopedRateThrottle
 
     def get_queryset(self):
         return CV.objects.filter(user=self.request.user).order_by('-is_default', '-updated_at')
@@ -40,7 +43,9 @@ class CVViewSet(viewsets.ModelViewSet):
         else:
             serializer.save(user=self.request.user)
 
-    @action(detail=True, methods=['post'], url_path='analyze')
+    @action(detail=True, methods=['post'], url_path='analyze',
+            permission_classes=[permissions.IsAuthenticated, HasAIConsent],
+            throttle_classes=[UserRateThrottle, ScopedRateThrottle])
     def analyze_cv(self, request, id=None):
         cv = self.get_object()
         job_description = request.data.get('job_description', '')

@@ -8,7 +8,7 @@ django.setup()
 
 from users.models import User
 from skills.models import Skill, UserSkill
-from learning.models import CareerPath, LearningModule
+from learning.models import CareerPath, LearningModule, CareerPathModule
 from progress.models import UserEnrollment, UserProgress
 from ai.models import JobScan, Recommendation
 from cv.models import CV
@@ -371,6 +371,54 @@ def create_progress(users, paths, modules):
 
         # update enrollment
         enrollment.refresh_from_db()
+
+
+# -----------------------------
+# CAREER PATH <-> MODULE LINKS
+# -----------------------------
+# Modules per path, in learning order (beginner -> advanced).
+PATH_MODULES = {
+    "Full Stack Developer": ["Python Fundamentals", "SQL Basics", "React Basics", "Django Basics",
+                             "Database Design", "REST API Development", "Docker Intro"],
+    "Software Developer": ["Python Fundamentals", "SQL Basics", "Django Basics", "Database Design",
+                           "REST API Development", "Docker Intro", "Advanced Python"],
+    "Frontend Developer": ["React Basics", "REST API Development"],
+    "Data Scientist": ["Python Fundamentals", "SQL Basics", "Database Design", "Advanced Python"],
+    "Data Analyst": ["SQL Basics", "Python Fundamentals", "Database Design"],
+    "DevOps Engineer": ["Python Fundamentals", "Docker Intro", "DevOps Fundamentals", "Cloud Computing with AWS"],
+    "Cloud Architect": ["Docker Intro", "Database Design", "DevOps Fundamentals", "Cloud Computing with AWS"],
+    "Cybersecurity Analyst": ["Python Fundamentals", "SQL Basics", "Docker Intro"],
+    "Security Engineer": ["Python Fundamentals", "Docker Intro", "DevOps Fundamentals", "Cloud Computing with AWS"],
+    "QA Engineer": ["Python Fundamentals", "SQL Basics", "REST API Development", "Docker Intro"],
+    "Product Manager": ["SQL Basics"],
+    "UX Designer": ["React Basics"],
+}
+
+
+def link_path_modules():
+    """Attach learning modules to career paths (idempotent)."""
+    print("\nLinking modules to career paths...")
+    modules = {m.title: m for m in LearningModule.objects.all()}
+    created_total = 0
+    for path_title, module_titles in PATH_MODULES.items():
+        path = CareerPath.objects.filter(title=path_title).first()
+        if not path:
+            print(f"  skip (no path): {path_title}")
+            continue
+        for order, title in enumerate(module_titles, start=1):
+            module = modules.get(title)
+            if not module:
+                print(f"  skip (no module): {title}")
+                continue
+            link, created = CareerPathModule.objects.get_or_create(
+                career_path=path, module=module, defaults={"order_index": order}
+            )
+            if not created and link.order_index != order:
+                link.order_index = order
+                link.save(update_fields=["order_index"])
+            created_total += int(created)
+        print(f"  {path_title}: {len(module_titles)} modules")
+    print(f"Created {created_total} new links")
 
 
 # -----------------------------
@@ -780,6 +828,7 @@ def main():
 
     paths = create_paths()
     modules = create_modules()
+    link_path_modules()
 
     create_progress(users, paths, modules)
     create_cvs(users)

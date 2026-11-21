@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
+import AIDisclaimer from '../../components/AIDisclaimer';
 
 interface CVContent {
   personal_info: {
@@ -50,25 +51,25 @@ const defaultContent: CVContent = {
 const CVEdit: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [cv, setCv] = useState<any>(null);
+  const [cv, setCv] = useState<{ id: string; title: string; ats_score?: number | null } | null>(null);
   const [content, setContent] = useState<CVContent>(defaultContent);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<any>(null);
+  const [analysis, setAnalysis] = useState<{
+    total_score?: number;
+    breakdown?: { formatting?: number; structure?: number; keywords?: number; achievements?: number };
+    matched_keywords?: string[];
+    missing_keywords?: string[];
+    feedback?: string[];
+  } | null>(null);
   const [jobDescription, setJobDescription] = useState('');
   const [showAnalyzer, setShowAnalyzer] = useState(false);
   const [newSkill, setNewSkill] = useState('');
   const [newCert, setNewCert] = useState('');
   const token = localStorage.getItem('access_token');
 
-  useEffect(() => {
-    if (id) {
-      fetchCV();
-    }
-  }, [id]);
-
-  const fetchCV = async () => {
+  const fetchCV = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get(`/api/cv/cvs/${id}/`, {
@@ -95,7 +96,17 @@ const CVEdit: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, token]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      if (id) {
+        fetchCV();
+      }
+    };
+    run();
+  }, [id, fetchCV]);
 
   const saveCV = async () => {
     setSaving(true);
@@ -280,6 +291,7 @@ const CVEdit: React.FC = () => {
 
   return (
     <div className="max-w-6xl mx-auto">
+      <AIDisclaimer feature="ATS scores and CV feedback" />
       {/* Header */}
       <div className="bg-white rounded-lg shadow p-4 mb-6 flex justify-between items-center flex-wrap gap-4">
         <div>
@@ -390,11 +402,11 @@ const CVEdit: React.FC = () => {
                 </div>
               </div>
 
-              {analysis.matched_keywords?.length > 0 && (
+              {(analysis.matched_keywords?.length ?? 0) > 0 && (
                 <div>
                   <h3 className="font-semibold mb-2">✅ Matched Keywords</h3>
                   <div className="flex flex-wrap gap-2">
-                    {analysis.matched_keywords.map((kw: string, idx: number) => (
+                    {(analysis.matched_keywords ?? []).map((kw: string, idx: number) => (
                       <span key={idx} className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-sm">
                         {kw}
                       </span>
@@ -403,11 +415,11 @@ const CVEdit: React.FC = () => {
                 </div>
               )}
 
-              {analysis.missing_keywords?.length > 0 && (
+              {(analysis.missing_keywords?.length ?? 0) > 0 && (
                 <div>
                   <h3 className="font-semibold mb-2">⚠️ Missing Keywords</h3>
                   <div className="flex flex-wrap gap-2">
-                    {analysis.missing_keywords.map((kw: string, idx: number) => (
+                    {(analysis.missing_keywords ?? []).map((kw: string, idx: number) => (
                       <span key={idx} className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-sm">
                         {kw}
                       </span>

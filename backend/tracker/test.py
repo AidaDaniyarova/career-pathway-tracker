@@ -43,6 +43,16 @@ class TestConfig:
         )
 
     @classmethod
+    def give_ai_consent(cls, user):
+        """Mark the user as having accepted the current AI usage notice"""
+        from django.conf import settings
+        user.ai_consent = True
+        user.ai_consent_at = timezone.now()
+        user.ai_consent_version = settings.AI_CONSENT_VERSION
+        user.save()
+        return user
+
+    @classmethod
     def create_test_skill(cls, name):
         """Create a test skill"""
         skill, created = Skill.objects.get_or_create(name=name)
@@ -113,8 +123,8 @@ class UserAuthTests(APITestCase):
         """Test user registration endpoint"""
         response = self.client.post('/api/users/register/', {
             'email': 'newuser@example.com',
-            'password': 'newpass123',
-            'password_confirm': 'newpass123',
+            'password': 'Str0ng-Passw0rd!',
+            'password_confirm': 'Str0ng-Passw0rd!',
             'first_name': 'New',
             'last_name': 'User'
         }, format='json')
@@ -449,6 +459,7 @@ class AIRecommendationTests(APITestCase):
             email="ai@example.com",
             password="testpass123"
         )
+        TestConfig.give_ai_consent(self.user)
         self.client.force_authenticate(user=self.user)
 
         # Create a skill
@@ -475,6 +486,7 @@ class JobScannerTests(APITestCase):
             email="jobscan@example.com",
             password="testpass123"
         )
+        TestConfig.give_ai_consent(self.user)
         self.client.force_authenticate(user=self.user)
 
         # Create a CV
@@ -530,6 +542,7 @@ class InterviewTests(APITestCase):
             email="interview@example.com",
             password="testpass123"
         )
+        TestConfig.give_ai_consent(self.user)
         self.client.force_authenticate(user=self.user)
 
     @patch('ai.huggingface_service.huggingface_service.generate_interview_questions')
@@ -580,6 +593,160 @@ class InterviewTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(isinstance(response.data, list))
+
+
+# ==================== AI CONSENT TESTS ====================
+class AIConsentTests(APITestCase):
+    """AI features must be blocked until the user accepts the AI notice"""
+
+    def setUp(self):
+        self.user = TestConfig.create_test_user(email="consent@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.cv = TestConfig.create_test_cv(self.user, "Consent CV")
+
+    def test_consent_state_defaults_to_unanswered(self):
+        response = self.client.get('/api/users/ai-consent/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data['ai_consent'])
+        self.assertTrue(response.data['ai_consent_required'])
+
+    def test_ai_endpoints_blocked_without_consent(self):
+        for method, url, body in [
+            ('get', '/api/ai/recommendations/', None),
+            ('post', '/api/ai/job-match/', {'cv_id': str(self.cv.id), 'description': 'Python dev'}),
+            ('post', '/api/ai/interview-questions/', {'job_description': 'Python dev'}),
+            ('post', '/api/ai/chat/', {'message': 'hi'}),
+            ('post', '/api/ai/summarize-job/', {'job_description': 'Python dev'}),
+            ('post', f'/api/cv/cvs/{self.cv.id}/analyze/', {'job_description': 'Python dev'}),
+        ]:
+            response = getattr(self.client, method)(url, body, format='json')
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN, url)
+            self.assertEqual(response.data.get('code'), 'ai_consent_required', url)
+
+    def test_declining_keeps_ai_blocked(self):
+        response = self.client.post('/api/users/ai-consent/', {'accepted': False}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['ai_consent'])
+        self.assertFalse(response.data['ai_consent_required'])
+        response = self.client.get('/api/ai/recommendations/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch('ai.huggingface_service.huggingface_service.get_career_advice')
+    def test_accepting_unlocks_ai(self, mock_advice):
+        mock_advice.return_value = "ok"
+        response = self.client.post('/api/users/ai-consent/', {'accepted': True}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['ai_consent'])
+        self.assertIsNotNone(response.data['ai_consent_at'])
+        response = self.client.get('/api/ai/recommendations/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_outdated_consent_version_requires_reconsent(self):
+        self.user.ai_consent = True
+        self.user.ai_consent_version = 'old-version'
+        self.user.save()
+        response = self.client.get('/api/ai/recommendations/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_consent_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post('/api/users/ai-consent/', {'accepted': True}, format='json')
+        self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+# ==================== SECURITY TESTS ====================
+class SecurityTests(APITestCase):
+    """Regression tests for authentication / authorisation hardening"""
+
+    def setUp(self):
+        self.user = TestConfig.create_test_user(email="sec@example.com", password="testpass123")
+        self.other = TestConfig.create_test_user(email="other@example.com", password="testpass123")
+
+    def test_registration_rejects_weak_password(self):
+        from django.test import override_settings
+        validators = [
+            {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+            {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+            {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+        ]
+        with override_settings(AUTH_PASSWORD_VALIDATORS=validators):
+            response = self.client.post('/api/users/register/', {
+                'email': 'weak@example.com', 'password': '12345678', 'password_confirm': '12345678',
+            }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', response.data)
+
+    def test_registration_rejects_duplicate_email_case_insensitive(self):
+        response = self.client.post('/api/users/register/', {
+            'email': 'SEC@example.com', 'password': 'Str0ng-Passw0rd!', 'password_confirm': 'Str0ng-Passw0rd!',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_login_wrong_password_and_inactive_look_identical(self):
+        bad = self.client.post('/api/users/login/', {'email': 'sec@example.com', 'password': 'nope'}, format='json')
+        self.other.is_active = False
+        self.other.save()
+        inactive = self.client.post('/api/users/login/', {'email': 'other@example.com', 'password': 'testpass123'},
+                                    format='json')
+        self.assertEqual(bad.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(inactive.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_blacklists_refresh_token(self):
+        login = self.client.post('/api/users/login/', {'email': 'sec@example.com', 'password': 'testpass123'},
+                                 format='json')
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+        refresh = login.data['refresh']
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        out = self.client.post('/api/users/logout/', {'refresh': refresh}, format='json')
+        self.assertEqual(out.status_code, status.HTTP_200_OK)
+        again = self.client.post('/api/users/token/refresh/', {'refresh': refresh}, format='json')
+        self.assertEqual(again.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_user_cannot_change_own_email_via_me(self):
+        self.client.force_authenticate(user=self.user)
+        self.client.patch('/api/users/users/me/', {'email': 'hijack@example.com'}, format='json')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, 'sec@example.com')
+
+    def test_profile_rejects_javascript_picture_url(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.patch('/api/users/profile/', {'profile_picture': 'javascript:alert(1)'},
+                                     format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_public_profile_hides_email(self):
+        response = self.client.get(f'/api/users/profile/{self.user.id}/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('email', response.data)
+
+    def test_profile_management_route_reachable(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get('/api/users/profile/management/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['email'], 'sec@example.com')
+
+    def test_profile_exposes_is_staff_read_only(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get('/api/users/profile/')
+        self.assertIn('is_staff', response.data)
+        self.client.patch('/api/users/profile/', {'is_staff': True}, format='json')
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_staff)
+
+    def test_user_cannot_read_another_users_cv(self):
+        cv = TestConfig.create_test_cv(self.other, "Private CV")
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(f'/api/cv/cvs/{cv.id}/')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_admin_endpoints_require_staff(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get('/api/admin/users/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_ai_endpoints_require_authentication(self):
+        response = self.client.post('/api/ai/chat/', {'message': 'hi'}, format='json')
+        self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
 
 # ==================== RUN TESTS ====================

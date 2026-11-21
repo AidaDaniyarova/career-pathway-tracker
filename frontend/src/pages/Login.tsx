@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
+import type { ApiError } from '../utils/errors';
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -23,7 +24,8 @@ const Login: React.FC = () => {
 
     try {
       await login(email, password);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       setError(err.response?.data?.error || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);

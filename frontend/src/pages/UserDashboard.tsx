@@ -1,21 +1,32 @@
+import React, { Suspense, useEffect } from "react";
 import {Routes, Route, Link, useNavigate, useLocation} from 'react-router-dom';
-import {useAuth} from '../context/AuthContext';
-import DashboardHome from './dashboard/DashboardHome';
-import ProfileManagement from './dashboard/ProfileManagement';
-import CareerPaths from './dashboard/CareerPaths';
-import CareerPathDetail from './dashboard/CareerPathDetail';
-import LearningModules from './dashboard/LearningModules';
-import LearningModuleDetail from './dashboard/LearningModuleDetail';
-import QuizEngine from './dashboard/QuizEngine';
-import QuizTake from './dashboard/QuizTake';
-import QuizResults from './dashboard/QuizResults';
-import CVBuilder from './dashboard/CVBuilder';
-import CVEdit from './dashboard/CVEdit';
-import JobScanner from './dashboard/JobScanner';
-import InterviewGenerator from './dashboard/InterviewGenerator';
-import ProgressDashboard from './dashboard/ProgressDashboard';
-import Recommendations from './dashboard/Recommendations';
-import {useEffect} from "react";
+import { useAuth } from '../context/auth';
+import ProtectedRoute from '../components/ProtectedRoute';
+import AIConsentManager from '../components/AIConsentManager';
+import { openAIConsent } from '../components/aiConsentEvents';
+import OnboardingManager from '../components/onboarding/OnboardingManager';
+import { openTour } from '../components/onboarding/onboarding';
+
+const DashboardHome = React.lazy(() => import('./dashboard/DashboardHome'));
+const ProfileManagement = React.lazy(() => import('./dashboard/ProfileManagement'));
+const CareerPaths = React.lazy(() => import('./dashboard/CareerPaths'));
+const CareerPathDetail = React.lazy(() => import('./dashboard/CareerPathDetail'));
+const LearningModules = React.lazy(() => import('./dashboard/LearningModules'));
+const LearningModuleDetail = React.lazy(() => import('./dashboard/LearningModuleDetail'));
+const QuizEngine = React.lazy(() => import('./dashboard/QuizEngine'));
+const QuizTake = React.lazy(() => import('./dashboard/QuizTake'));
+const QuizResults = React.lazy(() => import('./dashboard/QuizResults'));
+const CVBuilder = React.lazy(() => import('./dashboard/CVBuilder'));
+const CVEdit = React.lazy(() => import('./dashboard/CVEdit'));
+const JobScanner = React.lazy(() => import('./dashboard/JobScanner'));
+const InterviewGenerator = React.lazy(() => import('./dashboard/InterviewGenerator'));
+const ProgressDashboard = React.lazy(() => import('./dashboard/ProgressDashboard'));
+const Recommendations = React.lazy(() => import('./dashboard/Recommendations'));
+
+/** Wraps pages that need a logged-in user. */
+const Private: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <ProtectedRoute>{children}</ProtectedRoute>
+);
 
 const UserDashboard: React.FC = () => {
     const {user, logout, isAdmin} = useAuth();
@@ -23,8 +34,8 @@ const UserDashboard: React.FC = () => {
     const location = useLocation();
     const isAuthenticated = !!user;
 
-    const handleLogout = () => {
-        logout();
+    const handleLogout = async () => {
+        await logout();
         navigate('/login');
     };
 
@@ -139,24 +150,44 @@ const UserDashboard: React.FC = () => {
 
             {/* Main Content */}
             <main className="container mx-auto px-4 py-6">
+                <Suspense fallback={<div className="flex justify-center items-center h-64 text-gray-500">Loading…</div>}>
                 <Routes>
                     <Route index element={<DashboardHome/>}/>
-                    <Route path="profile" element={<ProfileManagement/>}/>
-                    <Route path="progress" element={<ProgressDashboard/>}/>
+                    <Route path="profile" element={<Private><ProfileManagement/></Private>}/>
+                    <Route path="progress" element={<Private><ProgressDashboard/></Private>}/>
                     <Route path="career-paths" element={<CareerPaths/>}/>
                     <Route path="career-paths/:id" element={<CareerPathDetail/>}/>
                     <Route path="learning" element={<LearningModules/>}/>
                     <Route path="learning/:id" element={<LearningModuleDetail/>}/>
-                    <Route path="quizzes" element={<QuizEngine/>}/>
-                    <Route path="quizzes/take/:id" element={<QuizTake/>}/>
-                    <Route path="quizzes/results/:id" element={<QuizResults/>}/>
-                    <Route path="recommendations" element={<Recommendations/>}/>
-                    <Route path="cv-builder" element={<CVBuilder/>}/>
-                    <Route path="cv-builder/edit/:id" element={<CVEdit/>}/>
-                    <Route path="job-scanner" element={<JobScanner/>}/>
+                    <Route path="quizzes" element={<Private><QuizEngine/></Private>}/>
+                    <Route path="quizzes/take/:id" element={<Private><QuizTake/></Private>}/>
+                    <Route path="quizzes/results/:id" element={<Private><QuizResults/></Private>}/>
+                    <Route path="recommendations" element={<Private><Recommendations/></Private>}/>
+                    <Route path="cv-builder" element={<Private><CVBuilder/></Private>}/>
+                    <Route path="cv-builder/edit/:id" element={<Private><CVEdit/></Private>}/>
+                    <Route path="job-scanner" element={<Private><JobScanner/></Private>}/>
                     <Route path="interview" element={<InterviewGenerator/>}/>
                 </Routes>
+                </Suspense>
             </main>
+
+            <footer className="container mx-auto px-4 pb-6 text-center text-xs text-gray-500">
+                Some features use AI and may produce inaccurate results.{' '}
+                {isAuthenticated && (
+                    <>
+                        <button type="button" onClick={openAIConsent} className="underline hover:text-gray-700">
+                            AI &amp; privacy settings
+                        </button>
+                        {' · '}
+                        <button type="button" onClick={openTour} className="underline hover:text-gray-700">
+                            Getting started
+                        </button>
+                    </>
+                )}
+            </footer>
+
+            {isAuthenticated && <AIConsentManager/>}
+            {isAuthenticated && user && <OnboardingManager key={user.id}/>}
         </div>
     );
 };

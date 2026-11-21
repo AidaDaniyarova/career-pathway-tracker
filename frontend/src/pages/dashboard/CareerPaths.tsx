@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 
@@ -23,16 +23,7 @@ const CareerPaths: React.FC = () => {
   const [selectedIndustry, setSelectedIndustry] = useState('');
   const [industries, setIndustries] = useState<string[]>([]);
 
-  useEffect(() => {
-    fetchCareerPaths();
-    fetchIndustries();
-  }, []);
-
-  useEffect(() => {
-    fetchCareerPaths();
-  }, [searchTerm, selectedIndustry]);
-
-  const fetchCareerPaths = async () => {
+  const fetchCareerPaths = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -61,9 +52,9 @@ const CareerPaths: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchTerm, selectedIndustry]);
 
-  const fetchIndustries = async () => {
+  const fetchIndustries = useCallback(async () => {
     try {
       const response = await axios.get('/api/learning/career-paths/industries/');
       setIndustries(Array.isArray(response.data) ? response.data : []);
@@ -71,7 +62,23 @@ const CareerPaths: React.FC = () => {
       console.error('Failed to fetch industries:', err);
       setIndustries([]);
     }
-  };
+  }, []);
+
+  // Re-runs whenever the search term or industry filter changes (fetchCareerPaths depends on them)
+  useEffect(() => {
+    const run = async () => {
+      await fetchCareerPaths();
+    };
+    run();
+  }, [fetchCareerPaths]);
+
+  // Industry list only needs loading once
+  useEffect(() => {
+    const run = async () => {
+      await fetchIndustries();
+    };
+    run();
+  }, [fetchIndustries]);
 
   if (loading) {
     return (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
+import { getErrorMessage, type ApiError } from '../utils/errors';
 
 const Register: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -48,13 +49,14 @@ const Register: React.FC = () => {
     try {
       await register(formData);
       navigate('/dashboard');
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       const errorData = err.response?.data;
-      if (typeof errorData === 'object') {
+      if (errorData && typeof errorData === 'object') {
         const errors = Object.values(errorData).flat().join(', ');
         setError(errors || 'Registration failed');
       } else {
-        setError(errorData?.error || 'Registration failed');
+        setError(getErrorMessage(err, 'Registration failed'));
       }
     } finally {
       setLoading(false);

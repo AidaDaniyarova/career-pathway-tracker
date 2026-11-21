@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
-import { useAuth } from '../../context/AuthContext';
-import { showToast } from "../../components/Toast";
+import { useAuth } from '../../context/auth';
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 interface ModuleDetail {
   id: string;
@@ -32,59 +33,45 @@ const LearningModuleDetail: React.FC = () => {
   const [completing, setCompleting] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [enrollmentId, setEnrollmentId] = useState<string | null>(null);
   const token = localStorage.getItem('access_token');
 
-  // Track if user has returned from external site
-  const [returnedFromExternal, setReturnedFromExternal] = useState(false);
-
-  useEffect(() => {
+  // Enrollment comes from the URL (?enrollment_id=) or router state - derived, not stored
+  const enrollmentId = useMemo<string | null>(() => {
     const params = new URLSearchParams(location.search);
-    const encId = params.get('enrollment_id') || location.state?.enrollment_id;
-    if (encId) {
-      setEnrollmentId(encId);
-    }
-
-    // Check if returning from external site
-    const justReturned = sessionStorage.getItem('returned_from_external');
-    if (justReturned === 'true') {
-      setReturnedFromExternal(true);
-      sessionStorage.removeItem('returned_from_external');
-    }
+    return params.get('enrollment_id') || (location.state as { enrollment_id?: string } | null)?.enrollment_id || null;
   }, [location]);
 
-  useEffect(() => {
-    if (id && id !== 'undefined') {
-      fetchModule();
-    } else {
-      console.error('Invalid module ID:', id);
-      setLoading(false);
-    }
-  }, [id]);
+  // Whether the user just came back from the external course site (read once on mount)
+  const [returnedFromExternal] = useState(() => sessionStorage.getItem('returned_from_external') === 'true');
+  const autoCompleteAttempted = useRef(false);
 
-  // Auto-mark as complete when returning from external site
-  useEffect(() => {
-    if (returnedFromExternal && module && module.user_status !== 'completed') {
-      handleCompleteFromExternal();
-    }
-  }, [returnedFromExternal, module]);
-
-  const fetchModule = async () => {
+  const fetchModule = useCallback(async () => {
     try {
       setLoading(true);
-      const config: any = {};
-      if (token) {
-        config.headers = { Authorization: `Bearer ${token}` };
-      }
+      const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
       const response = await axios.get(`/api/learning/modules/${id}/`, config);
       setModule(response.data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch module:', err);
       setError(err.response?.data?.error || 'Failed to load module');
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, token]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      if (id && id !== 'undefined') {
+        fetchModule();
+      } else {
+        console.error('Invalid module ID:', id);
+        setLoading(false);
+      }
+    };
+    run();
+  }, [id, fetchModule]);
 
   const handleStart = async () => {
     if (!isAuthenticated) {
@@ -100,7 +87,7 @@ const LearningModuleDetail: React.FC = () => {
 
     setStarting(true);
     try {
-      const requestBody: any = { module_id: id };
+      const requestBody: { module_id?: string; enrollment_id?: string } = { module_id: id };
       if (enrollmentId) {
         requestBody.enrollment_id = enrollmentId;
       }
@@ -124,7 +111,8 @@ const LearningModuleDetail: React.FC = () => {
       } else {
         showToast('Module started! Good luck with your learning!', 'success');
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       showToast(err.response?.data?.error || 'Failed to start module', 'error');
     } finally {
       setStarting(false);
@@ -139,9 +127,9 @@ const LearningModuleDetail: React.FC = () => {
 
     setCompleting(true);
     try {
-      const finalEnrollmentId = enrollmentId || (module as any)?.enrollment_id;
+      const finalEnrollmentId = enrollmentId || module?.enrollment_id;
 
-      const requestBody: any = { module_id: id };
+      const requestBody: { module_id?: string; enrollment_id?: string } = { module_id: id };
       if (finalEnrollmentId) {
         requestBody.enrollment_id = finalEnrollmentId;
       }
@@ -160,20 +148,21 @@ const LearningModuleDetail: React.FC = () => {
 
       sessionStorage.setItem('shouldRefreshDashboard', 'true');
       navigate('/dashboard/progress');
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       showToast(err.response?.data?.error || 'Failed to complete module', 'error');
     } finally {
       setCompleting(false);
     }
   };
 
-  const handleCompleteFromExternal = async () => {
+  const handleCompleteFromExternal = useCallback(async () => {
     if (!isAuthenticated || !token) return;
 
     try {
-      const finalEnrollmentId = enrollmentId || (module as any)?.enrollment_id;
+      const finalEnrollmentId = enrollmentId || module?.enrollment_id;
 
-      const requestBody: any = { module_id: id };
+      const requestBody: { module_id?: string; enrollment_id?: string } = { module_id: id };
       if (finalEnrollmentId) {
         requestBody.enrollment_id = finalEnrollmentId;
       }
@@ -196,10 +185,24 @@ const LearningModuleDetail: React.FC = () => {
       // Refresh dashboard data
       sessionStorage.setItem('shouldRefreshDashboard', 'true');
 
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to auto-complete module:', err);
     }
-  };
+  }, [enrollmentId, fetchModule, id, isAuthenticated, module, token]);
+
+  // Auto-mark as complete when returning from the external site (at most once per visit)
+  useEffect(() => {
+    if (!returnedFromExternal || autoCompleteAttempted.current) return;
+    if (module && module.user_status !== 'completed') {
+      autoCompleteAttempted.current = true;
+      sessionStorage.removeItem('returned_from_external');
+      const run = async () => {
+        await handleCompleteFromExternal();
+      };
+      run();
+    }
+  }, [returnedFromExternal, module, handleCompleteFromExternal]);
 
   const openExternalContent = () => {
     if (module?.content_url) {

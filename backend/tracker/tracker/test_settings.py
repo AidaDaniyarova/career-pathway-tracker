@@ -30,6 +30,9 @@ ALLOWED_HOSTS = ['testserver', 'localhost', '127.0.0.1']
 REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {
     'anon': '10000/day',
     'user': '100000/day',
+    'login': '10000/day',
+    'register': '10000/day',
+    'ai': '10000/day',
 }
 
 # Disable CSRF for tests

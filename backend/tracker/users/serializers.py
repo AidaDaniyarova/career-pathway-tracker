@@ -1,3 +1,7 @@
+from django.conf import settings
+from django.contrib.auth.password_validation import validate_password
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from progress.models import UserEnrollment
 from skills.models import UserSkill
@@ -12,7 +16,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ('id', 'email', 'first_name', 'last_name', 'full_name',
                   'profile_picture', 'education_level', 'years_experience', 'created_at')
-        read_only_fields = ('created_at',)
+        read_only_fields = ('id', 'email', 'created_at')
 
     def get_full_name(self, obj):
         return obj.full_name
@@ -50,12 +54,22 @@ class UserRegisterSerializer(serializers.ModelSerializer):
                   'first_name', 'last_name')
         read_only_fields = ('id',)
 
+    def validate_email(self, value):
+        value = User.objects.normalize_email(value).lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Email already registered")
+        return value
+
     def validate(self, data):
         if data['password'] != data['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords do not match"})
 
-        if User.objects.filter(email=data['email']).exists():
-            raise serializers.ValidationError({"email": "Email already registered"})
+        candidate = User(email=data.get('email', ''), first_name=data.get('first_name', ''),
+                         last_name=data.get('last_name', ''))
+        try:
+            validate_password(data['password'], user=candidate)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
 
         return data
 
@@ -81,6 +95,11 @@ class ChangePasswordSerializer(serializers.Serializer):
     def validate(self, data):
         if data['new_password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
+        request = self.context.get('request')
+        try:
+            validate_password(data['new_password'], user=getattr(request, 'user', None))
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": list(exc.messages)})
         return data
 
 
@@ -95,9 +114,19 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'last_name', 'full_name',
             'profile_picture', 'bio', 'interests',
             'education_level', 'years_experience', 'current_job_title',
-            'member_since', 'total_xp', 'current_level', 'is_active'
+            'member_since', 'total_xp', 'current_level', 'is_active', 'is_staff',
+            'ai_consent', 'ai_consent_at', 'ai_consent_version', 'ai_consent_required'
         )
-        read_only_fields = ('id', 'email', 'created_at', 'is_active', 'total_xp', 'current_level')
+        read_only_fields = ('id', 'email', 'created_at', 'is_active', 'is_staff', 'total_xp',
+                            'current_level', 'ai_consent', 'ai_consent_at', 'ai_consent_version')
+
+    ai_consent_required = serializers.SerializerMethodField()
+
+    def get_ai_consent_required(self, obj):
+        """True when the user must (re)answer the AI notice."""
+        return obj.ai_consent is None or (
+            obj.ai_consent and obj.ai_consent_version != settings.AI_CONSENT_VERSION
+        )
 
     def get_full_name(self, obj):
         return obj.get_full_name()
@@ -114,6 +143,14 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
             'interests', 'education_level', 'years_experience',
             'current_job_title', 'skills'
         )
+
+    def validate_profile_picture(self, value):
+        return _validate_picture_url(value)
+
+    def validate_skills(self, value):
+        if len(value) > 100:
+            raise serializers.ValidationError("Too many skills")
+        return value
 
     def validate_years_experience(self, value):
         if value < 0:
@@ -160,9 +197,7 @@ class UserAvatarSerializer(serializers.ModelSerializer):
         fields = ('profile_picture',)
 
     def validate_profile_picture(self, value):
-        if value and not (value.startswith('http://') or value.startswith('https://') or value.startswith('/')):
-            raise serializers.ValidationError("Invalid URL format")
-        return value
+        return _validate_picture_url(value)
 
 
 class UserStatsSerializer(serializers.Serializer):
@@ -184,3 +219,34 @@ class UserSettingsSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         return validated_data
+
+def _validate_picture_url(value):
+    """Allow only http(s) URLs or site-relative paths (blocks javascript:/data: URLs)."""
+    if not value:
+        return value
+    if value.startswith('/') and not value.startswith('//'):
+        return value
+    try:
+        URLValidator(schemes=['http', 'https'])(value)
+    except DjangoValidationError:
+        raise serializers.ValidationError("Invalid URL format")
+    return value
+
+
+class PublicProfileSerializer(serializers.ModelSerializer):
+    """Public, non-sensitive view of a user (no email, no consent data)."""
+    full_name = serializers.SerializerMethodField()
+    member_since = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ('id', 'first_name', 'last_name', 'full_name', 'profile_picture', 'bio',
+                  'current_job_title', 'member_since', 'total_xp', 'current_level')
+        read_only_fields = fields
+
+    def get_full_name(self, obj):
+        return obj.get_full_name()
+
+
+class AIConsentSerializer(serializers.Serializer):
+    accepted = serializers.BooleanField()

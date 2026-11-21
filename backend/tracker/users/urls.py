@@ -5,7 +5,8 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 from .views import (
     UserViewSet, RegisterView, LoginView, LogoutView,
     ChangePasswordView, PublicProfileView,
-    ProfileView, ProfileAvatarView, ProfileStatsView, ProfileManagementView
+    ProfileView, ProfileAvatarView, ProfileStatsView, ProfileManagementView,
+    AIConsentView
 )
 
 router = DefaultRouter()
@@ -26,8 +27,11 @@ urlpatterns = [
     path('profile/', ProfileView.as_view(), name='api_profile'),
     path('profile/avatar/', ProfileAvatarView.as_view(), name='profile_avatar'),
     path('profile/stats/', ProfileStatsView.as_view(), name='profile_stats'),
-    path('profile/<str:username>/', PublicProfileView.as_view(), name='public_profile'),
     path('profile/management/', ProfileManagementView.as_view(), name='profile_management'),
+    path('profile/<uuid:user_id>/', PublicProfileView.as_view(), name='public_profile'),
+
+    # AI usage consent
+    path('ai-consent/', AIConsentView.as_view(), name='ai_consent'),
 
     # User management
     path('', include(router.urls)),

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
+import type { ApiError } from '../../utils/errors';
 
 interface Module {
   id: string;
@@ -21,11 +22,7 @@ const LearningModules: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchModules();
-  }, []);
-
-  const fetchModules = async () => {
+  const fetchModules = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -57,7 +54,7 @@ const LearningModules: React.FC = () => {
 
           // Create progress map
           const progressMap = new Map();
-          progressData.forEach((p: any) => {
+          progressData.forEach((p: { module_id: string; status: string; progress_percent: number }) => {
             progressMap.set(p.module_id, p);
           });
 
@@ -69,7 +66,7 @@ const LearningModules: React.FC = () => {
           }));
 
           setModules(modulesWithProgress);
-        } catch (progressErr) {
+        } catch {
           setModules(modulesData.map((m: Module) => ({
             ...m,
             status: 'not_started',
@@ -83,13 +80,22 @@ const LearningModules: React.FC = () => {
           progress_percent: 0
         })));
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch modules:', err);
       setError(err.message || 'Failed to load modules');
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchModules();
+    };
+    run();
+  }, [fetchModules]);
 
   if (loading) {
     return (

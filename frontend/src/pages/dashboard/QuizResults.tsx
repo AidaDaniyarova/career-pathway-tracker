@@ -55,7 +55,7 @@ const QuizResults: React.FC = () => {
           <div className="mt-6 text-left border-t pt-6">
             <h2 className="text-lg font-semibold mb-3">Recommended Career Paths</h2>
             <div className="space-y-3">
-              {results.recommendations.map((rec: any, idx: number) => (
+              {results.recommendations.map((rec: { career_path_id: string; title: string; match_percentage: number }, idx: number) => (
                 <Link key={idx} to={`/dashboard/career-paths/${rec.career_path_id}`} className="block border rounded-lg p-3 hover:bg-gray-50">
                   <div className="font-medium">{rec.title}</div>
                   <div className="text-sm text-gray-500">Match: {rec.match_percentage}%</div>

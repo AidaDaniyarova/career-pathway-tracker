@@ -37,3 +37,5 @@ dist/
 .env
 .env.local
 .env.production
+# Local test output
+test_report.txt

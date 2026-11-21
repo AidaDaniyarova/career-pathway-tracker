@@ -23,12 +23,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY')
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
-
 TESTING = 'test' in sys.argv
-if 'testserver' not in ALLOWED_HOSTS:
+
+# DEBUG is OFF unless explicitly enabled in the environment.
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('1', 'true', 'yes')
+
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG or TESTING:
+        # Throwaway key for local development / tests only.
+        SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured('SECRET_KEY environment variable must be set when DEBUG is off.')
+
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
+if TESTING and 'testserver' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('testserver')
 
 AUTH_USER_MODEL = 'users.User'
@@ -46,6 +56,7 @@ INSTALLED_APPS = [
     # Extra
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'django_extensions',
     'corsheaders',
     'channels',
@@ -69,6 +80,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -104,8 +116,32 @@ if TESTING:
             'NAME': ':memory:',
         }
     }
+elif os.getenv('DATABASE_URL'):
+    # Hosted Postgres (Neon): a single connection URL such as
+    # postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/dbname?sslmode=require&channel_binding=require
+    from urllib.parse import urlsplit, parse_qsl, unquote
+
+    _db_url = urlsplit(os.environ['DATABASE_URL'].strip().strip('"\''))
+    _db_options = dict(parse_qsl(_db_url.query))
+    _db_options.setdefault('sslmode', 'require')
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': unquote(_db_url.path.lstrip('/')),
+            'USER': unquote(_db_url.username or ''),
+            'PASSWORD': unquote(_db_url.password or ''),
+            'HOST': _db_url.hostname,
+            'PORT': str(_db_url.port or 5432),
+            'OPTIONS': _db_options,
+            # Reuse connections briefly; Neon's pooler (PgBouncer, transaction mode)
+            # does not support server-side cursors.
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+            'CONN_HEALTH_CHECKS': True,
+            'DISABLE_SERVER_SIDE_CURSORS': '-pooler.' in (_db_url.hostname or ''),
+        }
+    }
 else:
-    # Use PostgreSQL for development
+    # Individual settings (e.g. the local Postgres container in docker-compose)
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -114,6 +150,7 @@ else:
             'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST', 'localhost'),
             'PORT': os.getenv('DB_PORT', '5432'),
+            'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'prefer')},
         }
     }
 
@@ -155,8 +192,12 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/day',
-        'user': '1000/day',
+        'anon': os.getenv('THROTTLE_ANON', '200/hour'),
+        'user': os.getenv('THROTTLE_USER', '2000/hour'),
+        # Scoped rates for sensitive / expensive endpoints
+        'login': os.getenv('THROTTLE_LOGIN', '10/minute'),
+        'register': os.getenv('THROTTLE_REGISTER', '5/minute'),
+        'ai': os.getenv('THROTTLE_AI', '30/minute'),
     },
     # Disable CSRF for API views (JWT handles authentication)
     'UNAUTHENTICATED_USER': None,
@@ -171,7 +212,7 @@ SIMPLE_JWT = {
 
     # Algorithm
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
+    'SIGNING_KEY': os.getenv('JWT_SIGNING_KEY', SECRET_KEY),
     'VERIFYING_KEY': None,
 
     # Authentication headers
@@ -204,19 +245,65 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': True,
 }
 
-# CORS
+# CORS / CSRF
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    o.strip() for o in os.getenv(
+        'CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000'
+    ).split(',') if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', ','.join(CORS_ALLOWED_ORIGINS)).split(',') if o.strip()
+]
+
+# Security headers & cookies
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+if not DEBUG and not TESTING:
+    # Production-only hardening (requires HTTPS in front of Django).
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'True').lower() in ('1', 'true', 'yes')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # HSTS preload is a hard-to-undo commitment (browsers hard-code HTTPS for the domain),
+    # so it is opt-in. W021 only reports that it is off.
+    SECURE_HSTS_PRELOAD = os.getenv('SECURE_HSTS_PRELOAD', 'False').lower() in ('1', 'true', 'yes')
+    if not SECURE_HSTS_PRELOAD:
+        SILENCED_SYSTEM_CHECKS = ['security.W021']
+
+# Shared cache. Rate limits (login/register/AI) are counted in the cache, so with several
+# gunicorn workers they must share one store; otherwise each worker keeps its own count.
+# Set CACHE_REDIS_URL in production (docker-compose does). Without it, a per-process
+# in-memory cache is used, which is fine for local development.
+if os.getenv('CACHE_REDIS_URL'):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.environ['CACHE_REDIS_URL'],
+        }
+    }
+
+# Upload / request size limits (protects against oversized payloads)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
+# Version of the AI-use consent text shown to users. Bump this when the
+# wording or the AI processing materially changes so users are asked again.
+AI_CONSENT_VERSION = '2026-11-21'
 
 # CHANNELS (WebSockets)
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            "hosts": [('127.0.0.1', 6379)],
+            "hosts": [os.getenv('REDIS_URL', 'redis://127.0.0.1:6379')],
         },
     },
 }
@@ -264,3 +351,11 @@ APIFY_API_TOKEN = os.getenv('APIFY_API_TOKEN')
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Logging: never echo secrets; surface warnings/errors to the console.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'root': {'handlers': ['console'], 'level': os.getenv('LOG_LEVEL', 'WARNING')},
+}

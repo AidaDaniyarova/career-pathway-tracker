@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import {showToast} from "../../components/Toast.tsx";
+import { showToast } from '../../components/toastStore';
 import ConfirmationModal from "../../components/ConfirmationModal.tsx";
-import {useAuth} from "../../context/AuthContext.tsx";
+import { useAuth } from "../../context/auth";
 import { Link } from 'react-router-dom';
+import AIDisclaimer from '../../components/AIDisclaimer';
+import type { ApiError } from '../../utils/errors';
 
 interface Question {
   id: string;
@@ -25,6 +27,12 @@ interface SavedAnswer {
   updated_at: string;
 }
 
+interface CVSummary {
+  id: string;
+  title: string;
+  is_default?: boolean;
+}
+
 const InterviewGenerator: React.FC = () => {
   const { isAuthenticated } = useAuth();
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -32,7 +40,7 @@ const InterviewGenerator: React.FC = () => {
   const [selectedCV, setSelectedCV] = useState<string>('');
   const [jobDescription, setJobDescription] = useState('');
   const [jobTitle, setJobTitle] = useState('');
-  const [cvs, setCvs] = useState<any[]>([]);
+  const [cvs, setCvs] = useState<CVSummary[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
@@ -73,12 +81,7 @@ const InterviewGenerator: React.FC = () => {
     setAnswerToDelete(null);
   };
 
-  useEffect(() => {
-    fetchCVs();
-    fetchSavedAnswers();
-  }, []);
-
-  const fetchCVs = async () => {
+  const fetchCVs = useCallback(async () => {
     try {
       const response = await axios.get('/api/cv/cvs/', {
         headers: { Authorization: `Bearer ${token}` }
@@ -93,15 +96,15 @@ const InterviewGenerator: React.FC = () => {
       }
       setCvs(cvsData);
       if (cvsData.length > 0) {
-        const defaultCV = cvsData.find((cv: any) => cv.is_default);
+        const defaultCV = cvsData.find((cv: CVSummary) => cv.is_default);
         setSelectedCV(defaultCV?.id || cvsData[0].id);
       }
     } catch (err) {
       console.error('Failed to fetch CVs:', err);
     }
-  };
+  }, [token]);
 
-  const fetchSavedAnswers = async () => {
+  const fetchSavedAnswers = useCallback(async () => {
     setLoadingAnswers(true);
     try {
       const response = await axios.get('/api/ai/interview-answers/', {
@@ -113,7 +116,16 @@ const InterviewGenerator: React.FC = () => {
     } finally {
       setLoadingAnswers(false);
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchCVs();
+      fetchSavedAnswers();
+    };
+    run();
+  }, [fetchCVs, fetchSavedAnswers]);
 
   const generateQuestions = async () => {
     if (!jobDescription.trim()) {
@@ -136,7 +148,6 @@ const InterviewGenerator: React.FC = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-
       let questionsData = [];
       if (response.data.questions && Array.isArray(response.data.questions)) {
         questionsData = response.data.questions;
@@ -151,7 +162,8 @@ const InterviewGenerator: React.FC = () => {
       if (questionsData.length === 0) {
         setError('No questions generated. Please try a different job description.');
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to generate questions:', err);
       setError(err.response?.data?.error || 'Failed to generate questions. Please try again.');
     } finally {
@@ -212,6 +224,7 @@ const InterviewGenerator: React.FC = () => {
       {/* Left Panel - Input and Generated Questions */}
       <div className="lg:col-span-2 space-y-6">
         <h1 className="text-2xl font-bold">Interview Question Generator</h1>
+        <AIDisclaimer feature="Interview questions" />
 
         {/* Input Section */}
         <div className="bg-white rounded-lg shadow p-6">

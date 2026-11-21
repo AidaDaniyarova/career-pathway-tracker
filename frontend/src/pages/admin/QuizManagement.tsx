@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { showToast } from '../../components/Toast';
+import { showToast } from '../../components/toastStore';
+import type { ApiError } from '../../utils/errors';
 
 // Define proper types
 type QuestionType = 'multiple_choice' | 'ranking' | 'text';
@@ -98,12 +99,7 @@ const QuizManagement: React.FC = () => {
 
   const [careerPaths, setCareerPaths] = useState<Array<{ id: string; title: string }>>([]);
 
-  useEffect(() => {
-    fetchQuizzes();
-    fetchCareerPaths();
-  }, []);
-
-  const fetchQuizzes = async () => {
+  const fetchQuizzes = useCallback(async () => {
     try {
       const token = localStorage.getItem('access_token');
       const response = await axios.get<PaginatedResponse<Quiz> | Quiz[]>('/api/admin/quizzes/', {
@@ -129,9 +125,9 @@ const QuizManagement: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchCareerPaths = async () => {
+  const fetchCareerPaths = useCallback(async () => {
     try {
       const token = localStorage.getItem('access_token');
       const response = await axios.get('/api/admin/career-paths/', {
@@ -139,18 +135,27 @@ const QuizManagement: React.FC = () => {
       });
 
       // Handle both paginated and non-paginated responses
-      let careerPathsData: any[] = [];
+      let careerPathsData: { id: string; title: string }[] = [];
       if (response.data && 'results' in response.data) {
         careerPathsData = response.data.results;
       } else if (Array.isArray(response.data)) {
         careerPathsData = response.data;
       }
 
-      setCareerPaths(careerPathsData.map((cp: any) => ({ id: cp.id, title: cp.title })));
+      setCareerPaths(careerPathsData.map((cp) => ({ id: cp.id, title: cp.title })));
     } catch (err) {
       console.error('Failed to fetch career paths:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchQuizzes();
+      fetchCareerPaths();
+    };
+    run();
+  }, [fetchQuizzes, fetchCareerPaths]);
 
   const fetchQuestions = async (quizId: string) => {
     try {
@@ -187,7 +192,8 @@ const QuizManagement: React.FC = () => {
       setShowQuizModal(false);
       setQuizForm({ title: '', description: '', is_active: true, order: 0 });
       fetchQuizzes();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create quiz:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to create quiz', 'error');
     }
@@ -209,7 +215,8 @@ const QuizManagement: React.FC = () => {
         setSelectedQuiz(null);
         setQuestions([]);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to update quiz:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to update quiz', 'error');
     }
@@ -228,7 +235,8 @@ const QuizManagement: React.FC = () => {
         setQuestions([]);
       }
       fetchQuizzes();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to delete quiz:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to delete quiz', 'error');
     }
@@ -248,7 +256,8 @@ const QuizManagement: React.FC = () => {
       setShowQuestionModal(false);
       setQuestionForm({ question_text: '', question_type: 'multiple_choice', ranking_items: [], order: 0 });
       fetchQuestions(selectedQuiz.id);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create question:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to create question', 'error');
     }
@@ -268,7 +277,8 @@ const QuizManagement: React.FC = () => {
       if (selectedQuiz) {
         fetchQuestions(selectedQuiz.id);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to update question:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to update question', 'error');
     }
@@ -285,7 +295,8 @@ const QuizManagement: React.FC = () => {
       if (selectedQuiz) {
         fetchQuestions(selectedQuiz.id);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to delete question:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to delete question', 'error');
     }
@@ -307,7 +318,8 @@ const QuizManagement: React.FC = () => {
       if (selectedQuiz) {
         fetchQuestions(selectedQuiz.id);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to create option:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to create option', 'error');
     }
@@ -327,7 +339,8 @@ const QuizManagement: React.FC = () => {
       if (selectedQuiz) {
         fetchQuestions(selectedQuiz.id);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to update option:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to update option', 'error');
     }
@@ -344,7 +357,8 @@ const QuizManagement: React.FC = () => {
       if (selectedQuiz) {
         fetchQuestions(selectedQuiz.id);
       }
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to delete option:', err);
       showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to delete option', 'error');
     }

@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>Career Paths</h1>
+
+<div class="grid" id="careerPathsList">
+    Loading...
+</div>
+
+<script>
+    const token = localStorage.getItem('token');
+    
+    async function loadCareerPaths() {
+        try {
+            const headers = token ? { 'Authorization': `Token ${token}` } : {};
+            
+            const response = await fetch('/api/learning/career-paths/', { headers });
+            const data = await response.json();
+            
+            if (data.results) {
+                displayPaths(data.results);
+            } else if (Array.isArray(data)) {
+                displayPaths(data);
+            } else {
+                displayPaths([]);
+            }
+        } catch (error) {
+            document.getElementById('careerPathsList').innerHTML = '<div class="alert alert-error">Error loading career paths</div>';
+        }
+    }
+    
+    function displayPaths(paths) {
+        if (paths.length === 0) {
+            document.getElementById('careerPathsList').innerHTML = '<div class="card">No career paths available.</div>';
+            return;
+        }
+        
+        document.getElementById('careerPathsList').innerHTML = paths.map(path => `
+            <div class="card">
+                <h3>${path.title}</h3>
+                <p>${path.description || 'No description available'}</p>
+                <p><strong>Industry:</strong> ${path.industry || 'Various'}</p>
+                ${path.avg_salary_min && path.avg_salary_max ? `
+                    <p><strong>Salary Range:</strong> $${path.avg_salary_min.toLocaleString()} - $${path.avg_salary_max.toLocaleString()}</p>
+                ` : ''}
+                <p><strong>Growth Outlook:</strong> ${path.growth_outlook || 'Good'}</p>
+                <button onclick="viewPath('${path.id}')" class="btn">View Details</button>
+                ${token ? `<button onclick="enroll('${path.id}')" class="btn btn-success" style="margin-left: 10px;">Enroll</button>` : ''}
+            </div>
+        `).join('');
+    }
+    
+    function viewPath(pathId) {
+        window.location.href = `/api/career-paths/${pathId}/`;
+    }
+    
+    async function enroll(careerPathId) {
+        if (!token) {
+            window.location.href = '/api/login/';
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/learning/career-paths/${careerPathId}/enroll/`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Token ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                alert('Enrolled successfully!');
+                window.location.href = '/api/dashboard/';
+            } else {
+                const error = await response.json();
+                alert('Failed to enroll: ' + (error.error || 'Unknown error'));
+            }
+        } catch (error) {
+            alert('Error: ' + error.message);
+        }
+    }
+    
+    loadCareerPaths();
+</script>
+{% endblock %}

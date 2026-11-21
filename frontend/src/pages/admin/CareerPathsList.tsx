@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 import type { CareerPath } from '../../types';
+import type { ApiError } from '../../utils/errors';
 
 const CareerPathsList: React.FC = () => {
   const [items, setItems] = useState<CareerPath[]>([]);
@@ -19,11 +20,7 @@ const CareerPathsList: React.FC = () => {
     growth_outlook: 'stable'
   });
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -32,7 +29,8 @@ const CareerPathsList: React.FC = () => {
         ? response.data
         : response.data.results || [];
       setItems(data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch career paths:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -42,7 +40,15 @@ const CareerPathsList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchData();
+    };
+    run();
+  }, [fetchData]);
 
   const generateSlug = (title: string) => {
     return title
@@ -97,7 +103,8 @@ const CareerPathsList: React.FC = () => {
       setEditingItem(null);
       resetForm();
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to save career path:', err);
       if (err.response?.data?.slug) {
         setError(`Slug issue: ${err.response.data.slug}`);
@@ -131,7 +138,8 @@ const CareerPathsList: React.FC = () => {
       try {
         await adminAPI.deleteCareerPath(id);
         await fetchData();
-      } catch (err: any) {
+      } catch (caught) {
+        const err = caught as ApiError;
         console.error('Failed to delete career path:', err);
         alert(err.response?.data?.message || 'Failed to delete career path');
       }

@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="card" style="max-width: 400px; margin: 0 auto;">
+    <h2 style="text-align: center;">Login</h2>
+
+    <div id="errorMessage" style="display: none; background-color: #fee; color: #c00; padding: 10px; border-radius: 5px; margin-bottom: 15px;"></div>
+
+    <form id="loginForm">
+        <div class="form-group">
+            <label for="username">Username or Email</label>
+            <input type="text" id="username" name="username" required>
+        </div>
+
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required>
+        </div>
+
+        <button type="submit" class="btn" style="width: 100%;">Login</button>
+    </form>
+
+    <p style="text-align: center; margin-top: 1rem;">
+        Don't have an account? <a href="/register/">Register</a>
+    </p>
+</div>
+
+<script>
+    const API_BASE_URL = '/api/users';
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const errorDiv = document.getElementById('errorMessage');
+
+        errorDiv.style.display = 'none';
+        errorDiv.textContent = '';
+
+        if (!username || !password) {
+            errorDiv.textContent = 'Please enter both username/email and password.';
+            errorDiv.style.display = 'block';
+            return;
+        }
+
+        try {
+            const response = await fetch(API_BASE_URL + '/login/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username, password })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                localStorage.setItem('access_token', data.access);
+                localStorage.setItem('refresh_token', data.refresh);
+                if (data.user) {
+                    localStorage.setItem('user', JSON.stringify(data.user));
+                }
+                window.location.href = '/dashboard/';
+            } else {
+                errorDiv.textContent = data.error || data.detail || 'Login failed. Please check your credentials.';
+                errorDiv.style.display = 'block';
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            errorDiv.textContent = 'Network error. Please check if the server is running.';
+            errorDiv.style.display = 'block';
+        }
+    });
+</script>
+{% endblock %}

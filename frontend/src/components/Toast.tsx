@@ -1,32 +1,17 @@
 import React, { useState, useEffect } from 'react';
-interface ToastMessage {
-  id: string;
-  message: string;
-  type: 'success' | 'error' | 'info' | 'warning';
-}
-
-let addToastHandler: (message: ToastMessage) => void;
-
-export const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
-  if (addToastHandler) {
-    addToastHandler({
-      id: Date.now().toString(),
-      message,
-      type
-    });
-  }
-};
+import { registerToastHandler, type ToastMessage } from './toastStore';
 
 const ToastContainer: React.FC = () => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   useEffect(() => {
-    addToastHandler = (toast: ToastMessage) => {
+    registerToastHandler((toast: ToastMessage) => {
       setToasts(prev => [...prev, toast]);
       setTimeout(() => {
         setToasts(prev => prev.filter(t => t.id !== toast.id));
       }, 3000);
-    };
+    });
+    return () => registerToastHandler(null);
   }, []);
 
   const getIcon = (type: string) => {
@@ -56,7 +41,7 @@ const ToastContainer: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2">
+    <div className="fixed bottom-4 right-4 z-[60] space-y-2" role="status" aria-live="polite">
       {toasts.map((toast) => (
         <div
           key={toast.id}

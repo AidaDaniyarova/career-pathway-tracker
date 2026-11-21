@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 import type { Quiz } from '../../types';
+import type { ApiError } from '../../utils/errors';
 
 const QuizzesList: React.FC = () => {
   const [items, setItems] = useState<Quiz[]>([]);
@@ -14,15 +15,10 @@ const QuizzesList: React.FC = () => {
     module_id: '',
     passing_score: 70
   });
-  const [modules, setModules] = useState<any[]>([]);
+  const [modules, setModules] = useState<{ id: string; title: string }[]>([]);
   const [modulesLoading, setModulesLoading] = useState(true);
 
-  useEffect(() => {
-    fetchData();
-    fetchModules();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -31,7 +27,8 @@ const QuizzesList: React.FC = () => {
         ? response.data
         : response.data.results || [];
       setItems(data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch quizzes:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -41,9 +38,9 @@ const QuizzesList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchModules = async () => {
+  const fetchModules = useCallback(async () => {
     setModulesLoading(true);
     try {
       const response = await adminAPI.getModules();
@@ -56,7 +53,16 @@ const QuizzesList: React.FC = () => {
     } finally {
       setModulesLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchData();
+      fetchModules();
+    };
+    run();
+  }, [fetchData, fetchModules]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +83,8 @@ const QuizzesList: React.FC = () => {
       setEditingItem(null);
       setFormData({ title: '', module_id: '', passing_score: 70 });
       await fetchData();
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to save quiz:', err);
       setError(err.response?.data?.message || 'Failed to save quiz');
     } finally {
@@ -90,7 +97,8 @@ const QuizzesList: React.FC = () => {
       try {
         await adminAPI.deleteQuiz(id);
         await fetchData();
-      } catch (err: any) {
+      } catch (caught) {
+        const err = caught as ApiError;
         console.error('Failed to delete quiz:', err);
         alert(err.response?.data?.message || 'Failed to delete quiz');
       }

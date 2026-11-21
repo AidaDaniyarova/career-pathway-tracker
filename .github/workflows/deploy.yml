@@ -1,0 +1,131 @@
+name: Deploy
+
+# Runs after CI succeeds on a push to main, or manually from the Actions tab.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deploys at once; queue them instead of cancelling a deploy halfway
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build & push images
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      registry: ${{ steps.vars.outputs.registry }}
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Deploy exactly the commit that passed CI
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Compute image names
+        id: vars
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"   # GHCR requires lowercase
+          echo "registry=ghcr.io/${owner}" >> "$GITHUB_OUTPUT"
+          echo "tag=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.registry }}/career-pathway-tracker-backend:${{ steps.vars.outputs.tag }}
+            ${{ steps.vars.outputs.registry }}/career-pathway-tracker-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.registry }}/career-pathway-tracker-frontend:${{ steps.vars.outputs.tag }}
+            ${{ steps.vars.outputs.registry }}/career-pathway-tracker-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    name: Deploy to server
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Secrets live in this environment; add required reviewers to it for a manual approval gate
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Pull new images and restart over SSH
+        # Pinned to the commit for v1.2.5: this action receives the server's SSH key
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        env:
+          IMAGE_REGISTRY: ${{ needs.build-and-push.outputs.registry }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.tag }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          GHCR_USER: ${{ github.actor }}
+          # Short-lived token: only valid while this job runs
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public URL of the site (e.g. https://example.com); must match ALLOWED_HOSTS
+          APP_URL: ${{ vars.APP_URL }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: IMAGE_REGISTRY,IMAGE_TAG,DEPLOY_PATH,GHCR_USER,GHCR_TOKEN,APP_URL
+          script_stop: true
+          script: |
+            set -eu
+            cd "${DEPLOY_PATH:-$HOME/career-pathway-tracker}"
+
+            # Use the compose/nginx files from the commit being deployed.
+            # The server's .env is git-ignored and is never touched.
+            git fetch --quiet origin
+            git checkout --quiet --detach "$IMAGE_TAG"
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            export IMAGE_REGISTRY IMAGE_TAG
+            docker compose pull backend frontend
+            docker compose up -d --no-build --remove-orphans
+            docker logout ghcr.io
+
+            # Health check through the public URL (Django rejects Host headers not in ALLOWED_HOSTS).
+            # The API must answer within ~60s; migrations run on container start.
+            for i in $(seq 1 30); do
+              if curl -fsSL -o /dev/null "${APP_URL:-http://localhost}/api/learning/career-paths/"; then
+                echo "Deploy healthy: $IMAGE_TAG"
+                docker image prune -f >/dev/null
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Health check failed. Recent backend logs:"
+            docker compose logs --tail=80 backend
+            exit 1

@@ -1,24 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 import type { DashboardStats } from '../../types';
+import type { ApiError } from '../../utils/errors';
 
 const Overview: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
-
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await adminAPI.getStats();
       console.log('Stats response:', response.data); // Debug log
       setStats(response.data);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = caught as ApiError;
       console.error('Failed to fetch stats:', err);
       if (err.response?.status === 401) {
         setError('Authentication failed. Please log in again.');
@@ -30,7 +28,15 @@ const Overview: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    // Loads run asynchronously; state is updated once each request resolves.
+    const run = async () => {
+      fetchStats();
+    };
+    run();
+  }, [fetchStats]);
 
   if (loading) {
     return (
@@ -196,7 +202,7 @@ const Overview: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {stats.recent_users.map((user: any) => (
+                  {stats.recent_users.map((user) => (
                     <tr key={user.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm">{user.username}</td>
                       <td className="px-4 py-3 text-sm">{user.email}</td>
@@ -238,7 +244,7 @@ const Overview: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {stats.recent_enrollments.map((enrollment: any) => (
+                  {stats.recent_enrollments.map((enrollment) => (
                     <tr key={enrollment.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm">{enrollment.username}</td>
                       <td className="px-4 py-3 text-sm">{enrollment.career_path_title}</td>
