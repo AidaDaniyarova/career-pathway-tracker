@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE_URL } from '../../config';
 import { showToast } from '../../components/toastStore';
 import type { ApiError } from '../../utils/errors';
 
@@ -34,7 +35,7 @@ interface Recommendation {
 
 // Create axios instance with auth header
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
 });
 
 // Add token to all requests

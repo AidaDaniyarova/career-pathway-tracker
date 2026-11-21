@@ -29,9 +29,6 @@ services:
     image: ${IMAGE_REGISTRY:-local}/career-pathway-tracker-backend:${IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             gunicorn tracker.wsgi:application --bind 0.0.0.0:8000 --workers 3 --threads 2 --access-logfile -"
     volumes:
       - static_volume:/app/static
       - media_volume:/app/media
@@ -53,6 +50,7 @@ services:
       DB_PORT: 5432
       REDIS_URL: redis://redis:6379
       CACHE_REDIS_URL: redis://redis:6379/1
+      WEB_CONCURRENCY: 3
       HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
     depends_on:
       db:

@@ -39,3 +39,6 @@ dist/
 .env.production
 # Local test output
 test_report.txt
+
+# Vercel CLI project link
+.vercel

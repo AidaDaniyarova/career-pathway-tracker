@@ -753,3 +753,24 @@ class SecurityTests(APITestCase):
 if __name__ == '__main__':
     import unittest
     unittest.main(verbosity=2)
+
+class DeploymentConfigTests(APITestCase):
+    """Render deployment: health check and running without Redis."""
+
+    def test_health_check_ignores_unknown_host_and_https_redirect(self):
+        from django.test import override_settings
+        # Render probes the container with its own Host header over plain HTTP
+        with override_settings(ALLOWED_HOSTS=['example.com'], SECURE_SSL_REDIRECT=True):
+            response = self.client.get('/api/health/', HTTP_HOST='10.0.0.5:10000')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'ok')
+
+    def test_health_check_only_answers_get(self):
+        response = self.client.post('/api/health/')
+        self.assertNotEqual(response.status_code, 200)
+
+    def test_other_paths_still_validate_host(self):
+        from django.test import override_settings
+        with override_settings(ALLOWED_HOSTS=['example.com']):
+            response = self.client.get('/api/learning/career-paths/', HTTP_HOST='evil.test')
+        self.assertEqual(response.status_code, 400)

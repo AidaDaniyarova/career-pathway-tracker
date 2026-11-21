@@ -1,5 +1,6 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 import type { ApiError } from '../utils/errors';
+import { API_BASE_URL } from '../config';
 
 /** Generic JSON payload sent to the API. */
 export type Payload = Record<string, unknown>;
@@ -25,7 +26,7 @@ axios.interceptors.response.use(
 );
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },

@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -40,6 +41,9 @@ if not SECRET_KEY:
 ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
 if TESTING and 'testserver' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('testserver')
+# Render provides the service's own hostname (e.g. my-api.onrender.com)
+if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
+    ALLOWED_HOSTS.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
 
 AUTH_USER_MODEL = 'users.User'
 
@@ -76,7 +80,10 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'tracker.health.HealthCheckMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serves collected static files (Django admin CSS/JS) when no nginx is in front, e.g. on Render
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -278,10 +285,10 @@ if not DEBUG and not TESTING:
     if not SECURE_HSTS_PRELOAD:
         SILENCED_SYSTEM_CHECKS = ['security.W021']
 
-# Shared cache. Rate limits (login/register/AI) are counted in the cache, so with several
-# gunicorn workers they must share one store; otherwise each worker keeps its own count.
-# Set CACHE_REDIS_URL in production (docker-compose does). Without it, a per-process
-# in-memory cache is used, which is fine for local development.
+# Cache (rate-limit counters for login/register/AI). Redis is optional:
+#  - CACHE_REDIS_URL set (docker-compose): one shared store for all gunicorn workers.
+#  - not set (local dev, Render free): Django's in-memory cache, kept per worker process.
+#    Limits still apply, but each worker counts separately (Render free runs 1 worker by default).
 if os.getenv('CACHE_REDIS_URL'):
     CACHES = {
         'default': {
@@ -298,15 +305,17 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 # wording or the AI processing materially changes so users are asked again.
 AI_CONSENT_VERSION = '2026-11-21'
 
-# CHANNELS (WebSockets)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [os.getenv('REDIS_URL', 'redis://127.0.0.1:6379')],
+# CHANNELS (WebSockets). Redis is optional: without REDIS_URL (or the channels_redis
+# package) an in-process layer is used.
+if os.getenv('REDIS_URL') and importlib.util.find_spec('channels_redis'):
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {'hosts': [os.environ['REDIS_URL']]},
         },
-    },
-}
+    }
+else:
+    CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}
 
 # CELERY
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
@@ -332,6 +341,15 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'static'
 STATICFILES_DIRS = []
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    # Hashed + compressed files in production (built by collectstatic in the Dockerfile)
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'
+        if DEBUG or TESTING
+        else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    },
+}
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

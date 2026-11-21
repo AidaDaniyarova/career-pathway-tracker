@@ -1,8 +1,13 @@
 FROM python:3.13-slim
 
+# *_NUM_THREADS: one numpy/scikit-learn math thread per worker. Otherwise OpenBLAS
+# reserves buffers for every host CPU (~1 GB per worker measured), far over Render free's 512 MB.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
 
 WORKDIR /app
 
@@ -30,4 +35,5 @@ RUN SECRET_KEY=build-only-not-secret DEBUG=False python manage.py collectstatic 
 
 EXPOSE 8000
 
-CMD ["gunicorn", "tracker.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "--access-logfile", "-"]
+# Runs migrations, then gunicorn on $PORT (see start.sh)
+CMD ["sh", "/app/start.sh"]
