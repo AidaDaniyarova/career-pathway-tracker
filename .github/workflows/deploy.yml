@@ -100,7 +100,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           envs: IMAGE_REGISTRY,IMAGE_TAG,DEPLOY_PATH,GHCR_USER,GHCR_TOKEN,APP_URL
-          script_stop: true
+          # The script stops on the first failing command via `set -eu` below
           script: |
             set -eu
             cd "${DEPLOY_PATH:-$HOME/career-pathway-tracker}"
