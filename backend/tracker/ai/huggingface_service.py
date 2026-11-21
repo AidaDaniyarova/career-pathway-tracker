@@ -6,73 +6,55 @@ from typing import List, Dict, Any
 from django.conf import settings
 import logging
 
+from .skill_matching import extract_skills, split_soft_skills
+
 logger = logging.getLogger(__name__)
 
 
-def _calculate_experience_match(cv_text: str, job_text: str) -> float:
-    """Calculate experience level match based on years mentioned"""
-    import re
-
-    # Look for years of experience in job description
-    job_exp_patterns = [
-        r'(\d+)[\+\s]*years? of experience',
-        r'experience[:;]?\s*(\d+)[\+\s]*years?',
-        r'(\d+)[\+\s]*years?[\s]+experience',
+def _years_in_job(job_text: str):
+    patterns = [
+        r'(\d+)\s*\+?\s*years? of (?:\w+ )?experience',
+        r'experience[:;]?\s*(\d+)\s*\+?\s*years?',
+        r'(\d+)\s*\+?\s*years?\s+(?:\w+ )?experience',
         r'minimum of (\d+) years',
-        r'at least (\d+) years'
+        r'at least (\d+) years',
     ]
-
-    job_years = None
-    for pattern in job_exp_patterns:
+    for pattern in patterns:
         match = re.search(pattern, job_text.lower())
         if match:
-            job_years = int(match.group(1))
-            break
+            return int(match.group(1))
+    return None
 
-    # If no specific years mentioned, assume 2-5 years (medium difficulty)
-    if not job_years:
-        return 70  # Neutral score
 
-    # Look for years in CV
-    cv_exp_patterns = [
-        r'(\d+)[\+\s]*years? of experience',
-        r'experience[:;]?\s*(\d+)[\+\s]*years?',
-        r'(\d+)[\+\s]*years?[\s]+experience',
-        r'worked for (\d+) years',
-        r'total experience:?\s*(\d+) years'
-    ]
-
-    cv_years = None
-    for pattern in cv_exp_patterns:
-        match = re.search(pattern, cv_text.lower())
+def _years_in_cv(cv_text: str):
+    text = cv_text.lower()
+    for pattern in (r'(\d+)\s*\+?\s*years? of (?:\w+ )?experience', r'experience[:;]?\s*(\d+)\s*\+?\s*years?',
+                    r'(\d+)\s*\+?\s*years?\s+(?:\w+ )?experience', r'worked for (\d+) years'):
+        match = re.search(pattern, text)
         if match:
-            cv_years = int(match.group(1))
-            break
+            return int(match.group(1))
+    # Date ranges in work history: "2021 - 2024", "Jun 2023 - present", "2022 to now"
+    import datetime
+    current_year = datetime.datetime.now().year
+    ranges = re.findall(
+        r'(?:[a-z]{3,9}\.?\s+)?(\d{4})\s*(?:-|–|—|to)\s*(?:[a-z]{3,9}\.?\s+)?(\d{4}|present|now|current)', text)
+    if ranges:
+        return sum(max(0, (current_year if end in ('present', 'now', 'current') else int(end)) - int(start))
+                   for start, end in ranges)
+    return None
 
-    # Also look for job history duration
-    if not cv_years:
-        # Try to calculate from work experience entries
-        work_years = re.findall(r'(\d{4})\s*-\s*(\d{4}|present)', cv_text.lower())
-        if work_years:
-            total_years = 0
-            import datetime
-            current_year = datetime.datetime.now().year
-            for start, end in work_years:
-                start_year = int(start)
-                end_year = current_year if end == 'present' else int(end)
-                total_years += (end_year - start_year)
-            cv_years = total_years
 
-    if not cv_years:
-        return 50  # No experience info found
-
-    # Calculate match score (higher is better)
-    # Perfect match if cv_years >= job_years
+def _calculate_experience_match(cv_text: str, job_text: str):
+    """Experience score 0-100, or None when the job doesn't ask for a number of years."""
+    job_years = _years_in_job(job_text)
+    if job_years is None:
+        return None
+    cv_years = _years_in_cv(cv_text)
+    if cv_years is None:
+        return 50  # The job asks for experience and the CV doesn't say: count it as half
     if cv_years >= job_years:
-        return min(100, 100 + (cv_years - job_years) * 5)  # Bonus for extra experience
-    else:
-        # Penalty for missing experience
-        return max(0, 100 - ((job_years - cv_years) * 15))
+        return 100
+    return max(0, 100 - (job_years - cv_years) * 25)
 
 
 # Hugging Face Inference Providers, "hf-inference" provider: models hosted by
@@ -155,9 +137,8 @@ class HuggingFaceService:
         return None
 
     def extract_skills_from_job(self, job_description: str) -> List[str]:
-        """Extract skills from job description using keyword matching (always use fallback)"""
-        # Use keyword-based extraction directly (more reliable)
-        return self._extract_skills_keyword_based(job_description)
+        """Skills mentioned in a job description (whole-word matching, see ai/skill_matching.py)"""
+        return extract_skills(job_description)
 
     def _parse_ner_skills(self, ner_result) -> List[str]:
         """Parse NER results to extract skills"""
@@ -190,106 +171,43 @@ class HuggingFaceService:
         return skills[:20]
 
     def _extract_skills_keyword_based(self, text: str) -> List[str]:
-        """Extract skills using keyword matching (reliable fallback)"""
-        skills = []
-        text_lower = text.lower()
+        return extract_skills(text)
 
-        skill_database = [
-            # Programming Languages
-            'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust',
-            'ruby', 'php', 'swift', 'kotlin', 'scala', 'perl', 'r',
-
-            # Frameworks & Libraries
-            'react', 'angular', 'vue', 'django', 'flask', 'fastapi', 'spring', 'spring boot',
-            'node.js', 'express', 'laravel', 'rails', 'asp.net', 'graphql', 'rest api',
-            'jquery', 'bootstrap', 'tailwind', 'sass', 'webpack',
-
-            # Databases
-            'sql', 'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'dynamodb',
-            'cassandra', 'oracle', 'sqlite', 'firebase',
-
-            # Cloud & DevOps
-            'aws', 'amazon web services', 'azure', 'microsoft azure', 'gcp', 'google cloud',
-            'docker', 'kubernetes', 'terraform', 'jenkins', 'gitlab ci', 'github actions',
-            'ansible', 'prometheus', 'grafana', 'ci/cd', 'devops',
-
-            # Data Science & AI
-            'pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn', 'spark', 'hadoop',
-            'tableau', 'power bi', 'machine learning', 'deep learning', 'data science',
-            'natural language processing', 'computer vision', 'data visualization',
-            'data analysis', 'statistics', 'big data',
-
-            # Testing
-            'junit', 'pytest', 'selenium', 'cypress', 'jest', 'mocha', 'chai',
-
-            # Soft Skills (still useful for job description matching)
-            'leadership', 'communication', 'teamwork', 'problem solving', 'critical thinking',
-            'time management', 'adaptability', 'creativity', 'project management', 'agile',
-            'scrum', 'kanban', 'collaboration', 'mentoring'
-        ]
-
-        for skill in skill_database:
-            if skill in text_lower:
-                skills.append(skill.title() if len(skill) > 2 else skill)
-
-        return list(set(skills))[:25]
+    # Share of the score for each part. Parts the job doesn't mention are left out
+    # and the remaining weights are scaled up, so a perfect CV can reach 100.
+    MATCH_WEIGHTS = {'skill_match': 0.6, 'keyword_match': 0.2, 'soft_skill_match': 0.1, 'experience_match': 0.1}
 
     def calculate_match_score(self, cv_text: str, job_text: str) -> Dict:
-        """Calculate match score using comprehensive skill matching"""
+        """How well a CV matches a job description, 0-100."""
+        job_skills = set(extract_skills(job_text))
+        cv_skills = set(extract_skills(cv_text))
+        job_hard, job_soft = split_soft_skills(job_skills)
 
-        # Extract skills from both CV and job description
-        job_skills = self._extract_skills_keyword_based(job_text)
-        cv_skills = self._extract_skills_from_text(cv_text)
-
-        # Also extract soft skills
-        soft_skills = ['leadership', 'communication', 'teamwork', 'problem solving',
-                       'critical thinking', 'time management', 'adaptability', 'creativity',
-                       'project management', 'agile', 'scrum', 'collaboration', 'mentoring']
-
-        job_skills_lower = set(s.lower() for s in job_skills)
-        cv_skills_lower = set(s.lower() for s in cv_skills)
-        soft_skills_lower = set(s.lower() for s in soft_skills)
-
-        # Calculate skill match score
-        if job_skills_lower:
-            matched_skills = cv_skills_lower & job_skills_lower
-            skill_match_score = (len(matched_skills) / len(job_skills_lower)) * 100
-        else:
-            skill_match_score = 0
-
-        # Calculate soft skills match
-        job_soft_skills = job_skills_lower & soft_skills_lower
-        if job_soft_skills:
-            matched_soft = cv_skills_lower & job_soft_skills
-            soft_skill_score = (len(matched_soft) / len(job_soft_skills)) * 100
-        else:
-            soft_skill_score = 0
-
-        # Calculate keyword density score
+        parts = {}
+        if job_hard:
+            parts['skill_match'] = len(job_hard & cv_skills) / len(job_hard) * 100
         keyword_score = self._calculate_keyword_density(cv_text, job_text)
-
-        # Calculate experience level match (if applicable)
+        if keyword_score is not None:
+            parts['keyword_match'] = keyword_score
+        if job_soft:
+            parts['soft_skill_match'] = len(job_soft & cv_skills) / len(job_soft) * 100
         experience_score = _calculate_experience_match(cv_text, job_text)
+        if experience_score is not None:
+            parts['experience_match'] = experience_score
 
-        # Weighted final score (60% skills, 20% keywords, 10% soft skills, 10% experience)
-        final_score = (
-                (skill_match_score * 0.6) +
-                (keyword_score * 0.2) +
-                (soft_skill_score * 0.1) +
-                (experience_score * 0.1)
-        )
+        total_weight = sum(self.MATCH_WEIGHTS[name] for name in parts)
+        final_score = (sum(score * self.MATCH_WEIGHTS[name] for name, score in parts.items()) / total_weight
+                       if total_weight else 0)
 
         return {
             'score': round(min(100, final_score), 2),
             'method': 'skill_matching',
             'details': {
-                'skill_match': round(skill_match_score, 2),
-                'keyword_match': round(keyword_score, 2),
-                'soft_skill_match': round(soft_skill_score, 2),
-                'experience_match': round(experience_score, 2),
-                'matched_skills': list(matched_skills)[:10] if job_skills_lower else [],
-                'total_job_skills': len(job_skills_lower),
-                'total_cv_skills': len(cv_skills_lower)
+                **{name: round(score, 2) for name, score in parts.items()},
+                'not_applicable': [name for name in self.MATCH_WEIGHTS if name not in parts],
+                'matched_skills': sorted(job_skills & cv_skills),
+                'total_job_skills': len(job_skills),
+                'total_cv_skills': len(cv_skills),
             }
         }
 
@@ -517,82 +435,38 @@ class HuggingFaceService:
             return responses['default']
 
     def _extract_skills_from_text(self, text: str) -> List[str]:
-        """Extract skills from any text (CV or job description)"""
-        skills = []
-        text_lower = text.lower()
+        """Skills mentioned in any text (CV or job description)"""
+        return extract_skills(text)
 
-        skill_database = [
-            # Programming Languages
-            'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust',
-            'ruby', 'php', 'swift', 'kotlin', 'scala', 'perl', 'r',
+    # Words that appear in almost every job advert and say nothing about the role
+    KEYWORD_STOPWORDS = {
+        'this', 'that', 'these', 'those', 'with', 'from', 'have', 'will', 'your', 'their', 'they', 'what',
+        'about', 'which', 'would', 'could', 'should', 'being', 'been', 'were', 'where', 'there', 'after',
+        'before', 'into', 'also', 'more', 'than', 'then', 'them', 'over', 'such', 'other', 'well', 'when',
+        'while', 'within', 'across', 'including', 'using', 'must', 'essential', 'required', 'preferred',
+        'plus', 'ideal', 'ideally', 'candidate', 'role', 'join', 'team', 'teams', 'work', 'working', 'skills',
+        'ability', 'able', 'strong', 'good', 'great', 'excellent', 'experience', 'experienced', 'years', 'year',
+        'looking', 'opportunity', 'company', 'help', 'make', 'part', 'like', 'very', 'most', 'some', 'each',
+    }
 
-            # Frameworks & Libraries
-            'react', 'angular', 'vue', 'django', 'flask', 'fastapi', 'spring', 'spring boot',
-            'node.js', 'express', 'laravel', 'rails', 'asp.net', 'graphql', 'rest',
-            'jquery', 'bootstrap', 'tailwind', 'sass', 'webpack', 'vite',
-
-            # Databases
-            'sql', 'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'dynamodb',
-            'cassandra', 'oracle', 'sqlite', 'firebase', 'neo4j',
-
-            # Cloud & DevOps
-            'aws', 'amazon web services', 'azure', 'microsoft azure', 'gcp', 'google cloud',
-            'docker', 'kubernetes', 'terraform', 'jenkins', 'gitlab ci', 'github actions',
-            'ansible', 'prometheus', 'grafana', 'ci/cd', 'devops', 'cloudformation',
-
-            # Data Science & AI
-            'pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn', 'spark', 'hadoop',
-            'tableau', 'power bi', 'excel', 'machine learning', 'deep learning', 'data science',
-            'natural language processing', 'computer vision', 'data visualization',
-            'data analysis', 'statistics', 'big data', 'llm', 'openai',
-
-            # Testing
-            'junit', 'pytest', 'selenium', 'cypress', 'jest', 'mocha', 'chai',
-
-            # Soft Skills
-            'leadership', 'communication', 'teamwork', 'problem solving', 'critical thinking',
-            'time management', 'adaptability', 'creativity', 'project management', 'agile',
-            'scrum', 'kanban', 'collaboration', 'mentoring', 'decision making',
-            'presentation', 'negotiation', 'conflict resolution'
-        ]
-
-        for skill in skill_database:
-            if skill in text_lower:
-                skills.append(skill)
-
-        return list(set(skills))
-
-    def _calculate_keyword_density(self, cv_text: str, job_text: str) -> float:
-        """Calculate keyword density match between CV and job description"""
-        import re
+    def _calculate_keyword_density(self, cv_text: str, job_text: str):
+        """Share (0-100) of the job's 30 most frequent meaningful words that the CV also uses, or None."""
         from collections import Counter
 
-        # Extract important keywords from job description (exclude common words)
-        job_words = re.findall(r'\b[a-z]{4,}\b', job_text.lower())
-
-        # Remove common stopwords
-        stopwords = {'this', 'that', 'these', 'those', 'with', 'from', 'have', 'will',
-                     'your', 'their', 'they', 'what', 'about', 'which', 'would', 'could',
-                     'should', 'being', 'been', 'were', 'where', 'there', 'after', 'before'}
-
-        job_words = [w for w in job_words if w not in stopwords]
-
-        # Get most frequent keywords from job description (top 30)
-        job_keyword_counts = Counter(job_words)
-        top_job_keywords = [kw for kw, count in job_keyword_counts.most_common(30)]
-
+        job_words = [w for w in re.findall(r'\b[a-z][a-z+#]{3,}\b', job_text.lower())
+                     if w not in self.KEYWORD_STOPWORDS]
+        top_job_keywords = [kw for kw, _ in Counter(job_words).most_common(30)]
         if not top_job_keywords:
-            return 0
+            return None
 
-        # Check which keywords appear in CV
-        cv_lower = cv_text.lower()
-        matched_keywords = [kw for kw in top_job_keywords if kw in cv_lower]
+        cv_words = set(re.findall(r'\b[a-z][a-z+#]{3,}\b', cv_text.lower()))
 
-        # Calculate match percentage
-        match_percentage = (len(matched_keywords) / len(top_job_keywords)) * 100
+        def in_cv(word):
+            # Count simple plural/singular forms as the same word
+            return word in cv_words or word.rstrip('s') in cv_words or word + 's' in cv_words
 
-        return match_percentage
-
+        matched = [kw for kw in top_job_keywords if in_cv(kw)]
+        return len(matched) / len(top_job_keywords) * 100
 
 # Singleton instance
 huggingface_service = HuggingFaceService()

@@ -1,226 +1,161 @@
+from django.db import transaction
 from django.utils import timezone
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from learning.models import CareerPath, CareerPathSkill
 from progress.models import UserEnrollment, UserProgress
 from skills.models import UserSkill, Skill
 from quizzes.models import QuizResponse
 from cv.models import CV
 from learning.models import CareerPathModule, Prerequisite
+from quizzes.scoring import scores_for_response
 from .models import Recommendation, JobScan
+from .skill_matching import mentions_skill
+
+
+SCORING_VERSION = 2
 
 
 class AIRecommendationService:
-    """Comprehensive AI recommendation service using multiple data sources"""
+    """Career recommendations combined from the quiz, skills, CV and learning progress.
+
+    A career's match is the weighted average of the sources the user actually has
+    (quiz 35%, skills 25%, CV 20%, rescaled over the available ones), so a source
+    with no data doesn't count as zero. Progress on an enrolled path then adds a
+    bonus of up to 20% of the remaining gap to 100; it never lowers a score.
+    """
 
     def __init__(self, user):
         self.user = user
-        self.weight_quiz = 0.35  # Quiz responses weight
-        self.weight_skills = 0.25  # User skills weight
-        self.weight_progress = 0.20  # Learning progress weight
-        self.weight_cv = 0.20  # CV content weight
+        self.weight_quiz = 0.35     # Quiz responses weight
+        self.weight_skills = 0.25   # User skills weight
+        self.weight_cv = 0.20       # CV content weight
+        self.progress_bonus = 0.20  # Max share of the remaining gap closed by learning progress
 
     def get_all_recommendations(self, refresh=False):
-        """Get or generate all career recommendations"""
-        if not refresh:
-            existing = Recommendation.objects.filter(user=self.user)
-            if existing.exists() and (timezone.now() - existing.first().updated_at).days < 7:
-                return existing
-
+        """Current recommendations. Recalculated on every call: it's cheap, and the
+        user's skills, CV, quiz and progress may have changed since last time."""
         return self.generate_recommendations()
 
     def generate_recommendations(self):
-        """Generate comprehensive recommendations from all data sources"""
-        # Clear old recommendations
-        Recommendation.objects.filter(user=self.user).delete()
+        """Score every career path, save the results and return the top 10."""
+        careers = list(CareerPath.objects.prefetch_related('required_skills__skill'))
 
-        # Get all career paths
-        career_paths = CareerPath.objects.all()
-
-        # Calculate scores from different sources
         quiz_scores = self._calculate_quiz_scores()
-        skill_scores = self._calculate_skill_scores()
+        skill_scores = self._calculate_skill_scores(careers)
+        cv_scores = self._calculate_cv_scores(careers)
         progress_scores = self._calculate_progress_scores()
-        cv_scores = self._calculate_cv_scores()
 
-        recommendations = []
+        saved = []
+        with transaction.atomic():
+            for career in careers:
+                career_id = str(career.id)
+                parts = {}
+                if career_id in quiz_scores:
+                    parts['quiz'] = (quiz_scores[career_id], self.weight_quiz)
+                if career_id in skill_scores:
+                    parts['skills'] = (skill_scores[career_id], self.weight_skills)
+                if career_id in cv_scores:
+                    parts['cv'] = (cv_scores[career_id], self.weight_cv)
+                progress = progress_scores.get(career_id)
 
-        for career in career_paths:
-            career_id = str(career.id)
+                if not parts and progress is None:
+                    continue
 
-            # Calculate weighted score
-            total_score = 0
-            source_breakdown = {}
-            sources_used = {
-                'quiz': False,
-                'skills': False,
-                'progress': False,
-                'cv': False
-            }
+                if parts:
+                    total_weight = sum(weight for _, weight in parts.values())
+                    score = sum(value * weight for value, weight in parts.values()) / total_weight
+                    if progress is not None:
+                        score += self.progress_bonus * (progress / 100) * (100 - score)
+                else:
+                    score = progress  # Only progress is known for this path
 
-            if career_id in quiz_scores:
-                quiz_score = quiz_scores[career_id]
-                total_score += quiz_score * self.weight_quiz
-                source_breakdown['quiz'] = quiz_score
-                sources_used['quiz'] = True
+                breakdown = {name: round(value, 2) for name, (value, _) in parts.items()}
+                if progress is not None:
+                    breakdown['progress'] = round(progress, 2)
+                sources = {
+                    'quiz': 'quiz' in parts,
+                    'skills': 'skills' in parts,
+                    'cv': 'cv' in parts,
+                    'progress': progress is not None,
+                }
 
-            if career_id in skill_scores:
-                skill_score = skill_scores[career_id]
-                total_score += skill_score * self.weight_skills
-                source_breakdown['skills'] = skill_score
-                sources_used['skills'] = True
-
-            if career_id in progress_scores:
-                progress_score = progress_scores[career_id]
-                total_score += progress_score * self.weight_progress
-                source_breakdown['progress'] = progress_score
-                sources_used['progress'] = True
-
-            if career_id in cv_scores:
-                cv_score = cv_scores[career_id]
-                total_score += cv_score * self.weight_cv
-                source_breakdown['cv'] = cv_score
-                sources_used['cv'] = True
-
-            # Only create recommendation if there's at least one source of data
-            if total_score > 0 or any(sources_used.values()):
-                recommendation = Recommendation.objects.create(
+                recommendation, _ = Recommendation.objects.update_or_create(
                     user=self.user,
                     career_path=career,
-                    score=round(total_score, 2),
-                    recommendation_data={
-                        'scores': source_breakdown,
-                        'weighted_total': round(total_score, 2),
-                        'generated_at': timezone.now().isoformat()
+                    defaults={
+                        'score': round(min(100.0, max(0.0, score)), 2),
+                        'recommendation_data': {
+                            'scores': breakdown,
+                            'sources': sources,
+                            'scoring_version': SCORING_VERSION,
+                            'generated_at': timezone.now().isoformat(),
+                        },
+                        'source_quiz': sources['quiz'],
+                        'source_skills': sources['skills'],
+                        'source_cv': sources['cv'],
+                        'source_progress': sources['progress'],
                     },
-                    source_quiz=sources_used['quiz'],
-                    source_cv=sources_used['cv'],
-                    source_skills=sources_used['skills'],
-                    source_progress=sources_used['progress'],
                 )
-                recommendations.append(recommendation)
+                saved.append(recommendation)
 
-        # Sort by score and return top 10
-        recommendations.sort(key=lambda x: x.score, reverse=True)
-        return recommendations[:10]
+            # Paths that no longer have any data behind them
+            Recommendation.objects.filter(user=self.user).exclude(id__in=[r.id for r in saved]).delete()
+
+        saved.sort(key=lambda r: r.score, reverse=True)
+        return saved[:10]
 
     def _calculate_quiz_scores(self):
-        """Calculate career path scores based on quiz responses"""
+        """Scores from the user's latest quiz, recalculated with the current quiz scoring"""
+        quiz_response = QuizResponse.objects.filter(user=self.user).select_related('quiz') \
+            .order_by('-completed_at').first()
+        if not quiz_response:
+            return {}
+        scores = scores_for_response(quiz_response)
+        return {str(career_id): float(score or 0) for career_id, score in scores.items()}
+
+    @staticmethod
+    def _skill_weight(career_skill):
+        return 2 if career_skill.importance == 'required' else 1
+
+    def _calculate_skill_scores(self, careers):
+        """Share of each path's skills the user has, weighted by importance and level (1-5)"""
+        levels = {us.skill.name.lower(): us.level
+                  for us in UserSkill.objects.filter(user=self.user).select_related('skill')}
+        if not levels:
+            return {}
+
         scores = {}
-
-        # Get user's latest quiz response
-        quiz_response = QuizResponse.objects.filter(user=self.user).order_by('-completed_at').first()
-
-        if not quiz_response or not quiz_response.career_scores:
-            return scores
-
-        # Use stored career scores from quiz
-        for career_id, score in quiz_response.career_scores.items():
-            # Ensure career_id is a string and convert score to float
-            scores[str(career_id)] = float(score) if score else 0
-
-        return scores
-
-    def _calculate_skill_scores(self):
-        """Calculate career path scores based on user skills"""
-        scores = {}
-
-        # Get user's skills
-        user_skills = UserSkill.objects.filter(user=self.user).select_related('skill')
-        if not user_skills:
-            return scores
-
-        user_skill_names = [us.skill.name.lower() for us in user_skills]
-        user_skill_levels = {us.skill.name.lower(): us.level for us in user_skills}
-
-        # Get all career paths with their required skills
-        careers = CareerPath.objects.prefetch_related('required_skills__skill')
-
         for career in careers:
-            required_skills = career.required_skills.all()
-            if not required_skills:
-                scores[str(career.id)] = 0
-                continue
-
-            total_weight = 0
-            matched_weight = 0
-
-            for req_skill in required_skills:
-                skill_name = req_skill.skill.name.lower()
-                importance_weight = 2 if req_skill.importance == 'required' else 1
-                total_weight += importance_weight * 5  # Max possible score per skill
-
-                if skill_name in user_skill_names:
-                    user_level = user_skill_levels.get(skill_name, 1)
-                    # Calculate match percentage based on level (1-5)
-                    level_match = min(100, (user_level / 5) * 100)
-                    matched_weight += (level_match / 100) * importance_weight * 5
-
-            if total_weight > 0:
-                score = (matched_weight / total_weight) * 100
-                scores[str(career.id)] = round(score, 2)
-            else:
-                scores[str(career.id)] = 0
-
+            career_skills = list(career.required_skills.all())
+            if not career_skills:
+                continue  # Nothing to compare against
+            total = sum(self._skill_weight(cs) for cs in career_skills)
+            matched = sum(self._skill_weight(cs) * min(levels.get(cs.skill.name.lower(), 0), 5) / 5
+                          for cs in career_skills)
+            scores[str(career.id)] = round(matched / total * 100, 2)
         return scores
 
     def _calculate_progress_scores(self):
-        """Calculate career path scores based on learning progress"""
-        scores = {}
+        """Progress (0-100) on each path the user is enrolled in"""
+        return {
+            str(enrollment.career_path_id): float(enrollment.progress_percent or 0)
+            for enrollment in UserEnrollment.objects.filter(user=self.user)
+        }
 
-        # Get user's enrollments and progress
-        enrollments = UserEnrollment.objects.filter(user=self.user).select_related('career_path')
-
-        for enrollment in enrollments:
-            career_id = str(enrollment.career_path.id)
-            # Progress percentage directly contributes to score
-            scores[career_id] = float(enrollment.progress_percent)
-
-        return scores
-
-    def _calculate_cv_scores(self):
-        """Calculate career path scores based on CV content"""
-        scores = {}
-
-        # Get user's default or most recent CV
+    def _calculate_cv_scores(self, careers):
+        """Share of each path's skills mentioned in the user's CV, weighted by importance"""
         cv = CV.objects.filter(user=self.user).order_by('-is_default', '-updated_at').first()
+        cv_text = self._extract_cv_text(cv.content) if cv and cv.content else ''
+        if not cv_text.strip():
+            return {}
 
-        if not cv or not cv.content:
-            return scores
-
-        # Extract text from CV
-        cv_text = self._extract_cv_text(cv.content)
-        if not cv_text:
-            return scores
-
-        # Get all career paths
-        careers = CareerPath.objects.all()
-
-        # Use TF-IDF to match CV text with career descriptions
-        career_texts = []
-        career_ids = []
-
+        scores = {}
         for career in careers:
-            career_text = f"{career.title} {career.description or ''}"
-            # Add required skills to text
-            for req_skill in career.required_skills.all():
-                career_text += f" {req_skill.skill.name}"
-            career_texts.append(career_text)
-            career_ids.append(str(career.id))
-
-        if not career_texts:
-            return scores
-
-        # Vectorize and calculate similarity
-        vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
-        career_vectors = vectorizer.fit_transform(career_texts)
-        cv_vector = vectorizer.transform([cv_text])
-
-        similarities = cosine_similarity(cv_vector, career_vectors).flatten()
-
-        for idx, career_id in enumerate(career_ids):
-            scores[career_id] = round(similarities[idx] * 100, 2)
-
+            career_skills = list(career.required_skills.all())
+            if not career_skills:
+                continue
+            total = sum(self._skill_weight(cs) for cs in career_skills)
+            mentioned = sum(self._skill_weight(cs) for cs in career_skills if mentions_skill(cv_text, cs.skill.name))
+            scores[str(career.id)] = round(mentioned / total * 100, 2)
         return scores
 
     def _extract_cv_text(self, cv_content):
@@ -249,6 +184,7 @@ class AIRecommendationService:
                         text_parts.append(exp.get('title', ''))
                         text_parts.append(exp.get('company', ''))
                         text_parts.append(exp.get('description', ''))
+                        text_parts.append(exp.get('dates', ''))
 
             # Education
             if 'education' in cv_content:
@@ -270,7 +206,7 @@ class AIRecommendationService:
                         if isinstance(skill_list, list):
                             text_parts.extend([str(s) for s in skill_list if s])
 
-        return ' '.join(text_parts).lower()
+        return ', '.join(p for p in text_parts if p).lower()
 
     def get_recommendation_details(self, recommendation):
         """Get detailed information about a recommendation"""
@@ -330,6 +266,7 @@ class AIRecommendationService:
                                                2) if required_skills else 0
             },
             'recommended_modules': recommended_modules,
+            'created_at': recommendation.created_at,
             'sources': {
                 'quiz': recommendation.source_quiz,
                 'cv': recommendation.source_cv,
@@ -436,6 +373,7 @@ class JobMatchService:
                 text_parts.append(exp.get('title', ''))
                 text_parts.append(exp.get('company', ''))
                 text_parts.append(exp.get('description', ''))
+                text_parts.append(exp.get('dates', ''))
 
         if 'education' in cv_content:
             for edu in cv_content['education']:

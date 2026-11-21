@@ -1,4 +1,3 @@
-from django.utils import timezone
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,7 +7,7 @@ from .models import CareerQuiz, QuizResponse, QuizOption, QuizQuestion
 from .serializers import CareerQuizSerializer
 from .services import QuizDataService
 from learning.models import CareerPath
-from ai.models import Recommendation
+from .scoring import score_quiz, scores_for_response, top_career_id
 
 
 class CareerQuizViewSet(viewsets.ReadOnlyModelViewSet):
@@ -52,10 +51,12 @@ class CareerQuizViewSet(viewsets.ReadOnlyModelViewSet):
             ).order_by('-completed_at').first()
 
             if response:
+                career_scores = scores_for_response(response)
+                recommended_id = top_career_id(career_scores) or response.recommended_career_path_id
                 recommended_career = None
-                if response.recommended_career_path_id:
+                if recommended_id:
                     try:
-                        recommended_career = CareerPath.objects.get(id=response.recommended_career_path_id)
+                        recommended_career = CareerPath.objects.get(id=recommended_id)
                         recommended_career_data = {
                             'id': str(recommended_career.id),
                             'title': recommended_career.title,
@@ -71,7 +72,7 @@ class CareerQuizViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({
                     'has_previous_result': True,
                     'completed_at': response.completed_at,
-                    'career_scores': response.career_scores,
+                    'career_scores': career_scores,
                     'recommended_career': recommended_career_data,
                 })
 
@@ -92,16 +93,22 @@ class QuizSubmitView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        if not isinstance(responses, dict):
+            return Response(
+                {'error': 'responses must be an object of {question_id: option_id}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         try:
             quiz = CareerQuiz.objects.get(id=quiz_id, is_active=True)
-        except CareerQuiz.DoesNotExist:
+        except (CareerQuiz.DoesNotExist, ValueError, TypeError):
             return Response(
                 {'error': 'Quiz not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         # Calculate career scores based on responses
-        career_scores = self._calculate_career_scores(quiz, responses)
+        career_scores = score_quiz(quiz, responses)
 
         # Get top career recommendations
         recommendations = self._get_top_recommendations(career_scores)
@@ -115,8 +122,9 @@ class QuizSubmitView(APIView):
             recommended_career_path_id=recommendations[0]['career_path_id'] if recommendations else None
         )
 
-        # STORE RECOMMENDATIONS IN THE AI RECOMMENDATIONS TABLE
-        self._store_recommendations_in_db(request.user, recommendations, career_scores)
+        # Recalculate the combined AI recommendations (quiz + skills + CV + progress)
+        from ai.services import AIRecommendationService
+        AIRecommendationService(request.user).generate_recommendations()
 
         return Response({
             'message': 'Quiz submitted successfully',
@@ -124,76 +132,6 @@ class QuizSubmitView(APIView):
             'recommendations': recommendations,
             'career_scores': career_scores
         }, status=status.HTTP_201_CREATED)
-
-    def _store_recommendations_in_db(self, user, recommendations, career_scores):
-        """Store quiz recommendations in the Recommendation model for persistence"""
-        for rec in recommendations:
-            # Check if recommendation already exists
-            existing_rec, created = Recommendation.objects.update_or_create(
-                user=user,
-                career_path_id=rec['career_path_id'],
-                defaults={
-                    'score': rec['match_score'],
-                    'recommendation_data': {
-                        'source': 'quiz',
-                        'career_scores': career_scores,
-                        'match_score': rec['match_score'],
-                        'generated_at': timezone.now().isoformat()
-                    }
-                }
-            )
-
-            if created:
-                print(f"Created new recommendation for {user.email}: {rec['title']}")
-            else:
-                print(f"Updated existing recommendation for {user.email}: {rec['title']}")
-
-    def _calculate_career_scores(self, quiz, responses):
-        """Calculate scores for each career path based on quiz responses"""
-        career_scores = {}
-
-        # Get all career paths
-        career_paths = CareerPath.objects.all()
-
-        # Initialize scores
-        for career in career_paths:
-            career_scores[str(career.id)] = 0
-
-        # Process each response
-        for question_id, option_id in responses.items():
-            try:
-                # Get the option to find career weights
-                option = QuizOption.objects.get(id=option_id)
-                if option.career_weights:
-                    for career_id, weight in option.career_weights.items():
-                        if career_id in career_scores:
-                            career_scores[career_id] += float(weight)
-            except QuizOption.DoesNotExist:
-                continue
-
-        # Normalize scores to percentage (0-100)
-        max_possible_score = self._get_max_possible_score(quiz)
-        if max_possible_score > 0:
-            for career_id in career_scores:
-                career_scores[career_id] = min(100, (career_scores[career_id] / max_possible_score) * 100)
-
-        # Sort by score and round
-        career_scores = {k: round(v, 2) for k, v in sorted(career_scores.items(), key=lambda x: x[1], reverse=True)}
-
-        return career_scores
-
-    def _get_max_possible_score(self, quiz):
-        """Calculate the maximum possible score for the quiz"""
-        max_score = 0
-        questions = QuizQuestion.objects.filter(quiz=quiz, is_active=True)
-
-        for question in questions:
-            options = QuizOption.objects.filter(question=question)
-            for option in options:
-                if option.career_weights:
-                    max_score += max(option.career_weights.values()) if option.career_weights else 0
-
-        return max_score if max_score > 0 else 100
 
     def _get_top_recommendations(self, career_scores, limit=5):
         """Get top career recommendations based on scores"""
@@ -273,6 +211,6 @@ class QuizStartView(APIView):
             },
             'previous_results': {
                 'completed_at': previous_response.completed_at,
-                'career_scores': previous_response.career_scores
+                'career_scores': scores_for_response(previous_response)
             } if previous_response else None
         })

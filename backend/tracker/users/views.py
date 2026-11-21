@@ -251,10 +251,12 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         if total_quizzes > 0:
             total_score_sum = 0
             score_count = 0
-            for attempt in quiz_attempts:
-                if attempt.career_scores:
+            from quizzes.scoring import scores_for_response
+            for attempt in quiz_attempts.select_related('quiz'):
+                career_scores = scores_for_response(attempt)
+                if career_scores:
                     # Get the highest score from career_scores or average of all
-                    scores = list(attempt.career_scores.values())
+                    scores = list(career_scores.values())
                     if scores:
                         total_score_sum += max(scores)  # Use highest matching career score
                         score_count += 1

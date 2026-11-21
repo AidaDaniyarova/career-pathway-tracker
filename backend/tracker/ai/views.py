@@ -1,6 +1,5 @@
 from typing import List
 
-from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -9,115 +8,24 @@ from django.shortcuts import get_object_or_404
 from .models import Recommendation, JobScan, InterviewAnswer
 from .services import AIRecommendationService, PersonalizedRecommendationService
 from .huggingface_service import huggingface_service
+from .skill_matching import extract_skills
 from .permissions import AIViewMixin
 from cv.models import CV
 from learning.models import CareerPath
 from learning.models import LearningModule
 from skills.models import UserSkill
 from progress.models import UserEnrollment
-from quizzes.models import QuizResponse
 
 
 class CareerRecommendationsView(AIViewMixin, APIView):
-    """Get AI-powered career recommendations"""
+    """Career recommendations combined from the quiz, skills, CV and learning progress"""
 
     def get(self, request):
-        refresh = request.query_params.get('refresh', 'false').lower() == 'true'
-
-        # First, try to get existing recommendations from database
-        existing_recommendations = Recommendation.objects.filter(
-            user=request.user
-        ).select_related('career_path').order_by('-score')
-
-        if existing_recommendations.exists() and not refresh:
-            result = []
-            for rec in existing_recommendations[:10]:
-                if rec.career_path:
-                    result.append({
-                        'career_path': {
-                            'id': str(rec.career_path.id),
-                            'title': rec.career_path.title,
-                            'slug': rec.career_path.slug,
-                            'description': rec.career_path.description or '',
-                            'industry': rec.career_path.industry or '',
-                            'avg_salary_min': float(
-                                rec.career_path.avg_salary_min) if rec.career_path.avg_salary_min else None,
-                            'avg_salary_max': float(
-                                rec.career_path.avg_salary_max) if rec.career_path.avg_salary_max else None,
-                            'growth_outlook': rec.career_path.growth_outlook,
-                        },
-                        'match_score': float(rec.score) if rec.score else 0,
-                        'score_breakdown': rec.recommendation_data.get('score_breakdown',
-                                                                       {}) if rec.recommendation_data else {},
-                        'skill_analysis': rec.recommendation_data.get('skill_analysis',
-                                                                      {}) if rec.recommendation_data else {},
-                        'recommended_modules': [],
-                        'sources': rec.recommendation_data.get('sources',
-                                                               {'quiz': True}) if rec.recommendation_data else {
-                            'quiz': True},
-                        'created_at': rec.created_at
-                    })
-
-            if result:
-                return Response(result)
-
-        # If no recommendations in DB, try to get from quiz results
-        quiz_response = QuizResponse.objects.filter(user=request.user).order_by('-completed_at').first()
-
-        if quiz_response and quiz_response.career_scores:
-            result = []
-            sorted_careers = sorted(quiz_response.career_scores.items(), key=lambda x: x[1], reverse=True)
-
-            for career_id, score in sorted_careers[:5]:
-                try:
-                    career = CareerPath.objects.get(id=career_id)
-
-                    # Store this recommendation in the database for future
-                    Recommendation.objects.update_or_create(
-                        user=request.user,
-                        career_path=career,
-                        defaults={
-                            'score': float(score),
-                            'recommendation_data': {
-                                'source': 'quiz',
-                                'career_scores': quiz_response.career_scores,
-                                'match_score': float(score),
-                                'generated_at': timezone.now().isoformat(),
-                                'sources': {'quiz': True, 'cv': False, 'skills': False, 'progress': False}
-                            }
-                        }
-                    )
-
-                    result.append({
-                        'career_path': {
-                            'id': str(career.id),
-                            'title': career.title,
-                            'slug': career.slug,
-                            'description': career.description or '',
-                            'industry': career.industry or '',
-                            'avg_salary_min': float(career.avg_salary_min) if career.avg_salary_min else None,
-                            'avg_salary_max': float(career.avg_salary_max) if career.avg_salary_max else None,
-                            'growth_outlook': career.growth_outlook,
-                        },
-                        'match_score': float(score),
-                        'score_breakdown': {'quiz': float(score), 'skills': 0, 'progress': 0, 'cv': 0},
-                        'skill_analysis': {
-                            'matched_skills': [],
-                            'missing_skills': [],
-                            'total_required': 0,
-                            'total_matched': 0,
-                            'completion_percentage': 0
-                        },
-                        'recommended_modules': [],
-                        'sources': {'quiz': True, 'cv': False, 'skills': False, 'progress': False},
-                        'created_at': quiz_response.completed_at
-                    })
-                except CareerPath.DoesNotExist:
-                    continue
-
-            return Response(result)
-
-        return Response([])
+        service = AIRecommendationService(request.user)
+        recommendations = service.generate_recommendations()
+        return Response([
+            service.get_recommendation_details(rec) for rec in recommendations if rec.career_path
+        ])
 
 class RecommendationDetailView(APIView):
     """Get detailed recommendation for a specific career path"""
@@ -332,6 +240,7 @@ class JobMatchView(AIViewMixin, APIView):
                         text_parts.append(exp.get('title', ''))
                         text_parts.append(exp.get('company', ''))
                         text_parts.append(exp.get('description', ''))
+                        text_parts.append(exp.get('dates', ''))
 
             # Education
             if 'education' in cv_content:
@@ -359,61 +268,12 @@ class JobMatchView(AIViewMixin, APIView):
                                     text_parts.append(skill.get('name', ''))
                                     text_parts.append(skill.get('skill', ''))
 
-        return ' '.join(text_parts).lower()
+        # Comma-separated so list items stay distinct ("Python, R, SQL")
+        return ', '.join(p for p in text_parts if p).lower()
 
     def _extract_skills_from_cv(self, cv_text: str) -> List[str]:
-        """Extract skills directly from CV text using keyword matching"""
-        skills = []
-        text_lower = cv_text.lower()
-
-        # Comprehensive skill database
-        skill_database = [
-            # Programming Languages
-            'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust',
-            'ruby', 'php', 'swift', 'kotlin', 'scala', 'perl', 'r', 'matlab',
-
-            # Frameworks & Libraries
-            'react', 'angular', 'vue', 'django', 'flask', 'fastapi', 'spring', 'spring boot',
-            'node.js', 'express', 'laravel', 'rails', 'asp.net', 'graphql', 'rest',
-            'jquery', 'bootstrap', 'tailwind', 'sass', 'webpack', 'vite',
-
-            # Databases
-            'sql', 'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'dynamodb',
-            'cassandra', 'oracle', 'sqlite', 'firebase', 'neo4j',
-
-            # Cloud & DevOps
-            'aws', 'azure', 'gcp', 'google cloud', 'docker', 'kubernetes', 'terraform',
-            'jenkins', 'gitlab ci', 'github actions', 'ansible', 'prometheus', 'grafana',
-            'ci/cd', 'devops', 'infrastructure as code', 'cloudformation',
-
-            # Data Science & AI
-            'pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn', 'spark', 'hadoop',
-            'tableau', 'power bi', 'excel', 'machine learning', 'deep learning',
-            'natural language processing', 'computer vision', 'data visualization',
-            'data analysis', 'statistics', 'big data', 'llm', 'openai',
-
-            # Soft Skills
-            'leadership', 'communication', 'teamwork', 'problem solving', 'critical thinking',
-            'time management', 'adaptability', 'creativity', 'project management', 'agile',
-            'scrum', 'kanban', 'collaboration', 'mentoring', 'decision making',
-            'presentation', 'negotiation', 'conflict resolution'
-        ]
-
-        for skill in skill_database:
-            if skill in text_lower:
-                skills.append(skill)
-
-        # Also extract words that might be skills (capitalized words in skills section)
-        # Look for patterns like "Skills: Python, Java, SQL"
-        import re
-        skill_section_match = re.search(r'skills?:?\s*([^\n]+)', text_lower)
-        if skill_section_match:
-            potential_skills = re.findall(r'\b([a-z][a-z\s]{2,20}[a-z])\b', skill_section_match.group(1))
-            for skill in potential_skills:
-                if len(skill) > 2 and skill not in skills and skill not in ['and', 'the', 'for', 'with']:
-                    skills.append(skill)
-
-        return list(set(skills))
+        """Skills mentioned in the CV, using the same rules as for the job description"""
+        return extract_skills(cv_text)
 
     def _generate_recommendations(self, missing_skills, match_score, profile_missing=None):
         """Generate improvement recommendations"""

@@ -841,3 +841,169 @@ class HuggingFaceServiceTests(APITestCase):
             summary = self._service().summarize_job_description(self.JOB)
         self.assertTrue(summary)
         self.assertIn('not reachable', '\n'.join(logs.output))
+
+
+class SkillMatchingTests(APITestCase):
+    """Skills are matched as whole words, with short words only counted in skill lists."""
+
+    def test_no_false_positives_from_ordinary_words(self):
+        from ai.skill_matching import extract_skills
+        self.assertEqual(extract_skills("I am a good team player who loves programming"), ['Teamwork'])
+        self.assertEqual(extract_skills("You will excel in a fast-paced R&D team, good to go"), [])
+        self.assertNotIn('Java', extract_skills("Strong JavaScript skills"))
+        self.assertNotIn('SQL', extract_skills("PostgreSQL"))
+
+    def test_short_skill_names_in_lists(self):
+        from ai.skill_matching import extract_skills
+        self.assertEqual(extract_skills("Skills: Python, R, SQL and Go."), ['Go', 'Python', 'R', 'SQL'])
+        self.assertIn('Excel', extract_skills("Tools: Excel, Power BI"))
+
+    def test_aliases_map_to_one_skill(self):
+        from ai.skill_matching import extract_skills, mentions_skill
+        self.assertIn('REST APIs', extract_skills("Built a RESTful service"))
+        self.assertTrue(mentions_skill("experience with k8s", "Kubernetes"))
+        self.assertTrue(mentions_skill("Python, C#, Docker", "C#"))
+
+
+class JobMatchScoreTests(APITestCase):
+    """The CV vs job score reflects the CV, not words that happen to appear in it."""
+
+    JOB = ("Junior Backend Developer (Python). You will build REST APIs with Django and PostgreSQL, "
+           "write tests with pytest, use Docker and deploy to AWS. Good communication and teamwork are essential.")
+
+    def _score(self, cv_text, job=None):
+        from ai.huggingface_service import HuggingFaceService
+        return HuggingFaceService().calculate_match_score(cv_text, job or self.JOB)
+
+    def test_matching_cv_scores_high(self):
+        result = self._score("Backend developer. Built REST APIs with Python, Django and PostgreSQL. Wrote tests with "
+                             "pytest, containerised with Docker, deployed to AWS. Strong communication and teamwork.")
+        self.assertGreaterEqual(result['score'], 90)
+        self.assertEqual(result['details']['skill_match'], 100)
+
+    def test_unrelated_cv_scores_low(self):
+        result = self._score("Primary school teacher. Planned lessons, managed a classroom of 30 children and "
+                             "worked with parents. Good communication and teamwork.")
+        self.assertLess(result['score'], 20)
+        self.assertEqual(result['details']['skill_match'], 0)
+
+    def test_empty_cv_scores_zero(self):
+        self.assertEqual(self._score("Hello")['score'], 0)
+
+    def test_parts_the_job_does_not_mention_are_left_out(self):
+        result = self._score("Python and Django developer", job="Python and Django developer wanted")
+        self.assertIn('experience_match', result['details']['not_applicable'])
+        self.assertIn('soft_skill_match', result['details']['not_applicable'])
+        # Only skills (100%) and wording count; missing parts don't drag the score down
+        self.assertGreater(result['score'], 90)
+
+    def test_experience_from_cv_dates(self):
+        from ai.huggingface_service import _calculate_experience_match
+        job = "We need 3+ years of experience with Python."
+        self.assertEqual(_calculate_experience_match("Developer, Jun 2019 - present", job), 100)
+        self.assertEqual(_calculate_experience_match("Intern, 2024 - 2025", job), 50)
+        self.assertEqual(_calculate_experience_match("No dates here", job), 50)
+        self.assertIsNone(_calculate_experience_match("anything", "Python developer wanted"))
+
+
+class QuizScoringTests(APITestCase):
+    """Quiz scores are a share of the best possible answers, not of every option in the quiz."""
+
+    def setUp(self):
+        from quizzes.models import CareerQuiz, QuizQuestion, QuizOption
+        self.user = TestConfig.create_test_user(email="quiz@example.com", password="testpass123")
+        self.backend = TestConfig.create_test_career_path(title="Backend Developer")
+        self.frontend = TestConfig.create_test_career_path(title="Frontend Developer")
+        b, f = str(self.backend.id), str(self.frontend.id)
+        self.quiz = CareerQuiz.objects.create(title="Test quiz")
+        q1 = QuizQuestion.objects.create(quiz=self.quiz, question_text="Q1", order=1)
+        q2 = QuizQuestion.objects.create(quiz=self.quiz, question_text="Q2", order=2)
+        self.q1_backend = QuizOption.objects.create(question=q1, option_text="APIs", career_weights={b: 10})
+        QuizOption.objects.create(question=q1, option_text="UIs", career_weights={f: 10})
+        self.q2_backend = QuizOption.objects.create(question=q2, option_text="Servers", career_weights={b: 10, f: 5})
+        QuizOption.objects.create(question=q2, option_text="Design", career_weights={f: 8})
+        self.q1, self.q2 = q1, q2
+
+    def _backend_answers(self):
+        return {str(self.q1.id): str(self.q1_backend.id), str(self.q2.id): str(self.q2_backend.id)}
+
+    def test_best_answers_for_a_career_score_100(self):
+        from quizzes.scoring import score_quiz
+        scores = score_quiz(self.quiz, self._backend_answers())
+        self.assertEqual(scores[str(self.backend.id)], 100)
+        self.assertEqual(scores[str(self.frontend.id)], 25)
+
+    def test_options_from_other_questions_are_ignored(self):
+        from quizzes.scoring import score_quiz
+        # Answering Q1 with Q2's option, or a made-up question, must not add points
+        scores = score_quiz(self.quiz, {str(self.q1.id): str(self.q2_backend.id),
+                                        'not-a-question': str(self.q1_backend.id)})
+        self.assertEqual(scores[str(self.backend.id)], 0)
+
+    def test_submit_api_returns_fixed_scores(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.post('/api/quizzes/submit/',
+                                    {'quiz_id': str(self.quiz.id), 'responses': self._backend_answers()},
+                                    format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['career_scores'][str(self.backend.id)], 100)
+        self.assertEqual(response.data['recommendations'][0]['title'], "Backend Developer")
+
+    def test_saved_result_falls_back_when_answers_no_longer_exist(self):
+        import uuid
+        from quizzes.models import QuizResponse
+        from quizzes.scoring import scores_for_response
+        old = QuizResponse.objects.create(user=self.user, quiz=self.quiz,
+                                          responses={str(self.q1.id): str(uuid.uuid4())},
+                                          career_scores={str(self.backend.id): 42})
+        self.assertEqual(scores_for_response(old), {str(self.backend.id): 42})
+
+
+class RecommendationScoreTests(APITestCase):
+    """Recommendations average the sources the user has; missing sources don't count as zero."""
+
+    def setUp(self):
+        from learning.models import CareerPathSkill
+        self.user = TestConfig.create_test_user(email="recs@example.com", password="testpass123")
+        TestConfig.give_ai_consent(self.user)
+        self.backend = TestConfig.create_test_career_path(title="Backend Developer")
+        self.data = TestConfig.create_test_career_path(title="Data Analyst")
+        for name in ("Python", "Django", "SQL"):
+            CareerPathSkill.objects.create(career_path=self.backend, skill=TestConfig.create_test_skill(name),
+                                           importance='required')
+        for name in ("SQL", "Excel"):
+            CareerPathSkill.objects.create(career_path=self.data, skill=TestConfig.create_test_skill(name),
+                                           importance='required')
+
+    def _give_skills(self, *names, level=5):
+        for name in names:
+            UserSkill.objects.create(user=self.user, skill=TestConfig.create_test_skill(name), level=level)
+
+    def test_full_skill_match_scores_100_without_other_sources(self):
+        from ai.services import AIRecommendationService
+        self._give_skills("Python", "Django", "SQL")
+        recs = {r.career_path.title: r for r in AIRecommendationService(self.user).generate_recommendations()}
+        self.assertEqual(float(recs["Backend Developer"].score), 100)
+        self.assertEqual(float(recs["Data Analyst"].score), 50)  # Has SQL, not Excel
+        self.assertEqual(recs["Backend Developer"].recommendation_data['sources'],
+                         {'quiz': False, 'skills': True, 'cv': False, 'progress': False})
+
+    def test_progress_only_raises_a_score(self):
+        from ai.services import AIRecommendationService
+        self._give_skills("Python", "Django", "SQL", level=3)  # 60% skill match
+        UserEnrollment.objects.create(user=self.user, career_path=self.backend, progress_percent=50)
+        recs = {r.career_path.title: r for r in AIRecommendationService(self.user).generate_recommendations()}
+        # 60 + 0.2 * 50% * (100 - 60) = 64
+        self.assertEqual(float(recs["Backend Developer"].score), 64)
+
+    def test_api_returns_breakdown_and_sources(self):
+        self._give_skills("Python", "Django", "SQL")
+        self.client.force_authenticate(self.user)
+        response = self.client.get('/api/ai/recommendations/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        top = response.data[0]
+        self.assertEqual(top['career_path']['title'], "Backend Developer")
+        self.assertEqual(top['match_score'], 100)
+        self.assertEqual(top['score_breakdown']['skills'], 100)
+        self.assertTrue(top['sources']['skills'])
+        self.assertEqual(top['skill_analysis']['total_matched'], 3)
