@@ -43,5 +43,7 @@ test_report.txt
 # Vercel CLI project link
 .vercel
 
-.vercel
+# Local env files (keep the committed examples)
 .env*
+!.env.example
+!.env.docker.example

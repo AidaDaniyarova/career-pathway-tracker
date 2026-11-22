@@ -17,7 +17,7 @@ A career development platform for graduates moving into tech: take a career quiz
 3. Take the career quiz and look at the recommended paths.
 4. Browse career paths, enrol in one, and work through its learning modules.
 5. Build a CV in the CV builder, export it, and run the CV analysis against a job description.
-6. Open AI recommendations to see paths ranked by your skills, progress and quiz results.
+6. Open AI recommendations to see paths ranked by your quiz results, skills, CV and learning progress.
 
 ### Architecture
 
@@ -26,12 +26,12 @@ React + TypeScript (Vercel) → Django REST API in Docker (Render) → Neon Post
 ## Features
 
 - **Accounts:** JWT authentication (register, login, logout, token refresh) and a user profile with an avatar.
-- **Career quiz:** a weighted multiple-choice quiz that scores every career path.
+- **Career quiz:** a weighted multiple-choice quiz that scores every career path against the best possible answers.
 - **Career paths and modules:** paths with required skills, ordered learning modules, enrolment and progress tracking with XP.
 - **Skills:** track your skills with a proficiency level from 1 to 5.
 - **CV builder:** create, edit, duplicate and set a default CV; export to PDF or Word.
-- **CV analysis:** match a CV against a job description and list missing skills and keywords.
-- **AI features:** career recommendations, skill-gap analysis, interview question generation, job description summaries and a career-advice chat. Job description summaries use Hugging Face Inference Providers when `HF_TOKEN` is set; everything else, and the summaries when the API is unavailable, uses built-in logic.
+- **CV analysis:** score a CV against a job description (skills, wording, soft skills and years of experience; parts the job doesn't mention are left out) and list matched and missing skills.
+- **AI features:** career recommendations (a weighted average of the quiz, your skills and your CV, with a bonus for progress on enrolled paths), skill-gap analysis, interview question generation, job description summaries and a career-advice chat. Job description summaries use Hugging Face Inference Providers when `HF_TOKEN` is set; everything else, and the summaries when the API is unavailable, uses built-in logic.
 - **Admin dashboard:** manage users, career paths, modules and quizzes.
 
 ## Technology stack
@@ -86,7 +86,7 @@ Create the tables and load the demo data:
 ```bash
 cd tracker
 python manage.py migrate
-python populate_db.py      # safe to re-run; it never duplicates or deletes data
+python populate_db.py      # demo user + career paths, modules, skills, quiz; safe to re-run
 python manage.py runserver
 ```
 
@@ -132,7 +132,7 @@ CI runs all of these on every push and pull request, along with `manage.py check
 
 ## API overview
 
-All endpoints are under `/api/`. Apart from register, login and the health check, they need a JWT `Authorization: Bearer <token>` header.
+All endpoints are under `/api/`. Most need a JWT `Authorization: Bearer <token>` header. Register, login, token refresh, the health check and browsing career paths, modules and quizzes are public; changes to career paths and modules need an admin.
 
 | Area | Endpoints |
 |---|---|
@@ -170,5 +170,6 @@ career-pathway-tracker/
 
 - **The live app hangs on the first request:** the Render backend is waking up. Wait about a minute and retry.
 - **`Hugging Face rejected HF_TOKEN` in the logs:** the token is missing the Inference Providers permission, or it was revoked or expired. Create a new fine-grained token and update `HF_TOKEN`. The app keeps working on its fallback in the meantime.
+- **`Hugging Face Inference Providers credits are used up (HTTP 402)` in the logs:** the Hugging Face account has no credits (free accounts have no included usage). The app keeps working on its fallback. Add pre-paid credits, or remove `HF_TOKEN` to silence the message.
 - **`Hugging Face API is not reachable` in the logs:** a network error or timeout. The app uses the fallback for 5 minutes, then tries again.
 - **Database connection errors:** check `DATABASE_URL` in `backend/.env` and that it ends with `?sslmode=require`.
