@@ -27,7 +27,7 @@ pillow==13.0.0
 whitenoise==6.12.0
 
 # Optional shared cache for rate limiting (used when CACHE_REDIS_URL is set)
-redis==8.1.0
+redis==8.2.0
 
 # Production server
 gunicorn==23.0.0
