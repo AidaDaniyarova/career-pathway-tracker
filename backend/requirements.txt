@@ -15,7 +15,7 @@ python-dotenv==1.2.4
 
 # AI / matching / scraping
 scikit-learn==1.8.0
-requests==2.33.1
+requests==2.34.2
 fake-useragent==2.2.0
 
 # Documents (CV export)
